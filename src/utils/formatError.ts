@@ -1,0 +1,1 @@
+export const formatError = (field: string, message: string) => ({ field, message });

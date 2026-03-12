@@ -1,0 +1,91 @@
+model User {
+  UserID               String     @id @default(uuid())
+  FullName             String
+  Email                String     @unique
+  PasswordHash         String
+  Role                 Role       @default(Learner)
+  Bio                  String?
+  // Phone                String?    @unique
+  ProfileImageURL      String?
+  CreatedAt            DateTime   @default(now())
+  Status               UserStatus @default(Active)
+  PasswordResetToken   String?
+  PasswordResetExpires DateTime?
+
+  // Relations
+  userSkills        UserSkill[]
+}
+
+enum Role {
+  Admin
+  Learner
+}
+
+enum UserStatus {
+  Active
+  Inactive
+  Banned
+}
+
+model SkillOffer {
+  offerId   String @id @default(uuid())
+  userId    String
+  skillId   String
+  level     ProficiencyLevel
+  description String?
+
+  user  User  @relation(fields: [userId], references: [userId])
+  skill Skill @relation(fields: [skillId], references: [skillId])
+}
+
+model Skill {
+  skillId     String @id @default(uuid())
+  name        String
+  categoryId  String
+
+  category SkillCategory @relation(fields: [categoryId], references: [categoryId])
+
+  offers   SkillOffer[]
+  requests SkillRequest[]
+}
+
+model SkillCategory {
+  categoryId String @id @default(uuid())
+  name       String @unique
+  description String?
+
+  skills Skill[]
+}
+
+model SkillRequest {
+  requestId String @id @default(uuid())
+  userId    String
+  skillId   String
+  level     ProficiencyLevel
+  goal      String?
+
+  user  User  @relation(fields: [userId], references: [userId])
+  skill Skill @relation(fields: [skillId], references: [skillId])
+}
+
+model Match {
+  matchId     String   @id @default(uuid())
+  requesterId String
+  receiverId  String
+  skillOfferedId String
+  skillRequestedId String
+  status MatchStatus @default(PENDING)
+  createdAt DateTime @default(now())
+
+  requester User @relation("matchRequester", fields: [requesterId], references: [userId])
+  receiver  User @relation("matchReceiver", fields: [receiverId], references: [userId])
+}
+
+model Session {
+  sessionId  String @id @default(uuid())
+  matchId    String
+  startedAt  DateTime?
+  endedAt    DateTime?
+
+  participants SessionParticipant[]
+}

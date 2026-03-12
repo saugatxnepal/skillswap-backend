@@ -1,0 +1,343 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  UserID               String     @id @default(uuid())
+  FullName             String
+  Email                String     @unique
+  PasswordHash         String
+  Role                 Role       @default(Audience)
+  Bio                  String?
+  // Phone                String?    @unique
+  ProfileImageURL      String?
+  CreatedAt            DateTime   @default(now())
+  Status               UserStatus @default(Active)
+  PasswordResetToken   String?
+  PasswordResetExpires DateTime?
+
+  // Relations
+  // notifications    Notification[]
+  // reviewsGiven     Review[]               @relation("Reviewer")
+  // reviewsReceived  Review[]               @relation("Reviewed")
+  // bookings         Booking[]
+  // events           Event[]                @relation("Organizer")
+  // products         VendorProduct[]
+  // registrations    AudienceRegistration[]
+  // stalls           Stall[]
+  // organizerProfile OrganizerProfile?
+  // vendorProfile    VendorProfile?
+}
+
+enum Role {
+  Admin
+  Mentor
+  Learner
+}
+
+enum UserStatus {
+  Active
+  Inactive
+  Banned
+}
+
+model MentorProfile {
+  MentorID        String              @id @default(uuid())
+  UserID          String              @unique
+  Expertise        String
+  ExperienceYears Int
+  Description     String?
+  CreatedAt       DateTime   @default(now())
+
+  // Relations
+  user User @relation(fields: [UserID], references: [UserID])
+}
+
+model OrganizerProfile {
+  OrganizerID        String              @id @default(uuid())
+  UserID             String              @unique
+  OrganizationName   String
+  Address            String?
+  ContactPerson      String?
+  Phone              String?
+  Website            String?
+  VerificationStatus VerificationStatus  @default(Pending)
+  Documents          OrganizerDocument[]
+
+  // Relations
+  user User @relation(fields: [UserID], references: [UserID])
+}
+
+model OrganizerDocument {
+  DocumentID   String   @id @default(uuid())
+  OrganizerID  String
+  DocumentType String
+  FileURL      String
+  UploadedAt   DateTime @default(now())
+
+  // Relations
+  organizer OrganizerProfile @relation(fields: [OrganizerID], references: [OrganizerID])
+}
+
+model VendorProfile {
+  VendorProfileID    String             @id @default(uuid())
+  UserID             String             @unique
+  BusinessName       String
+  GSTNumber          String?
+  Address            String?
+  ContactPerson      String?
+  Phone              String?
+  VerificationStatus VerificationStatus @default(Pending)
+  Documents          VendorDocument[]
+
+  // Relations
+  user User @relation(fields: [UserID], references: [UserID])
+}
+
+model VendorDocument {
+  DocumentID      String   @id @default(uuid())
+  VendorProfileID String
+  DocumentType    String
+  FileURL         String
+  UploadedAt      DateTime @default(now())
+
+  // Relations
+  vendorProfile VendorProfile @relation(fields: [VendorProfileID], references: [VendorProfileID])
+}
+
+enum VerificationStatus {
+  Pending
+  Approved
+  Rejected
+}
+
+model Notification {
+  NotificationID String           @id @default(uuid())
+  UserID         String
+  Title          String
+  Message        String
+  Type           NotificationType
+  IsRead         Boolean          @default(false)
+  CreatedAt      DateTime         @default(now())
+
+  // Relations
+  user User @relation(fields: [UserID], references: [UserID])
+}
+
+enum NotificationType {
+  Payment
+  System
+  Booking
+  Event
+  Registration
+  Reminder
+  Alert
+}
+
+model Review {
+  ReviewID   String   @id @default(uuid())
+  ReviewerID String
+  ReviewedID String
+  EventID    String
+  Rating     Int
+  Comment    String?
+  CreatedAt  DateTime @default(now())
+
+  // Relations
+  reviewer User  @relation("Reviewer", fields: [ReviewerID], references: [UserID])
+  reviewed User  @relation("Reviewed", fields: [ReviewedID], references: [UserID])
+  event    Event @relation(fields: [EventID], references: [EventID])
+}
+
+model Event {
+  EventID        String      @id @default(uuid())
+  EventName      String
+  StartDateTime  DateTime @db.Timestamptz
+  EndDateTime    DateTime @db.Timestamptz
+  OrganizerID    String
+  Location       String
+  Description    String?
+  BannerImageURL String?
+  Status         EventStatus @default(Published)
+  TicketPrice    Float?
+  TotalStalls    Int?
+  Capacity       Int?
+  CreatedAt      DateTime    @default(now())
+
+  organizer     User                   @relation("Organizer", fields: [OrganizerID], references: [UserID])
+  stalls        Stall[]
+  products      VendorProduct[]
+  floorPlans    FloorPlan[]
+  reviews       Review[]
+  registrations AudienceRegistration[]
+  galleries      EventGallery[]
+}
+
+model EventGallery {
+  EventGalleryID  String   @id @default(uuid())
+  EventID    String
+  ImageURL   String
+
+  // Relations
+  event Event @relation(fields: [EventID], references: [EventID])
+}
+
+
+enum EventStatus {
+  Draft
+  Published
+  Cancelled
+  Completed
+}
+
+model Stall {
+  StallID     String      @id @default(uuid())
+  EventID     String
+  Name        String
+  Price       Float
+  Status      StallStatus @default(Available)
+  VendorID    String?
+  Description String?
+  PositionX   Int?
+  PositionY   Int?
+  FrontRow    Boolean?    @default(false)
+
+  // Relations
+  event    Event     @relation(fields: [EventID], references: [EventID])
+  vendor   User?     @relation(fields: [VendorID], references: [UserID])
+  bookings Booking[]
+  galleries StallGallery[]
+}
+
+model StallGallery {
+  StallGalleryID  String   @id @default(uuid())
+  StallID    String
+  ImageURL   String
+
+  // Relations
+  stall Stall @relation(fields: [StallID], references: [StallID], onDelete: Cascade)
+}
+
+enum StallStatus {
+  Available
+  Reserved
+  Booked
+}
+
+model StallCategory {
+  CategoryID   String    @id @default(uuid())
+  CategoryName String
+  Description  String?
+  bookings     Booking[]
+}
+
+model FloorPlan {
+  FloorPlanID String   @id @default(uuid())
+  EventID     String
+  FileURL     String
+  CreatedAt   DateTime @default(now())
+
+  // Relations
+  event Event @relation(fields: [EventID], references: [EventID])
+}
+
+model Booking {
+  BookingID      String         @id @default(uuid())
+  StallID        String
+  VendorID       String
+  CategoryID     String
+  BookingDate    DateTime
+  PaymentStatus  PaymentStatus  @default(Pending)
+  AmountPaid     Float
+  TransactionID  String?
+  ApprovalStatus ApprovalStatus @default(Pending)
+
+  // Relations
+  stall    Stall         @relation(fields: [StallID], references: [StallID])
+  vendor   User          @relation(fields: [VendorID], references: [UserID])
+  category StallCategory @relation(fields: [CategoryID], references: [CategoryID])
+  payment  Payment?
+  registrations AudienceRegistration[]
+}
+
+enum PaymentStatus {
+  Pending
+  Paid
+  Failed
+  Refunded
+}
+
+enum ApprovalStatus {
+  Pending
+  Approved
+  Rejected
+}
+
+model Payment {
+  TransactionID   String               @id @default(uuid())
+  BookingID       String?              @unique
+  PaymentMethod   PaymentMethod
+  Amount          Float
+  PaymentDate     DateTime
+  Status          PaymentGatewayStatus
+  GatewayResponse String?
+
+  // Relations
+  booking       Booking?               @relation(fields: [BookingID], references: [BookingID])
+  registrations AudienceRegistration[]
+}
+
+enum PaymentMethod {
+  eSewa
+  Khalti
+  Fonepay
+  Card
+  Cash
+}
+
+enum PaymentGatewayStatus {
+  Success
+  Failed
+  Pending
+}
+
+model VendorProduct {
+  ProductID   String  @id @default(uuid())
+  VendorID    String
+  EventID     String
+  Name        String
+  Description String?
+  Price       Float
+  ImageURL    String?
+
+  // Relations
+  vendor User  @relation(fields: [VendorID], references: [UserID])
+  event  Event @relation(fields: [EventID], references: [EventID])
+}
+
+model AudienceRegistration {
+  RegistrationID   String     @id @default(uuid())
+  EventID          String
+  AudienceID       String
+  RegistrationDate DateTime   @default(now())
+  TicketType       TicketType
+  PaymentID        String?
+  Quantity         Int        @default(1)
+  BookingID        String?
+
+  // Relations
+  event    Event    @relation(fields: [EventID], references: [EventID])
+  audience User     @relation(fields: [AudienceID], references: [UserID])
+  payment  Payment? @relation(fields: [PaymentID], references: [TransactionID])
+  booking  Booking? @relation(fields: [BookingID], references: [BookingID])
+}
+
+enum TicketType {
+  Free
+  Paid
+}

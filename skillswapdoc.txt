@@ -1,0 +1,12 @@
+we are creating a skill swap platform where there are 3 roles Admin, Mentor and Learner.
+Admins can manage the platform, Mentors can offer skills and Learners can request skills through video chat sessions like google meet.
+When mentor and learner is matched according to skill they can schedule a session and have a video chat to exchange knowledge.
+Before mentot and learner is matched they should have a time schedulig feature to find a common time slot for the session.
+Before that after matched mentor and learner can text chat through the platform to discuss the details of the session.
+The Skill and SkillCategory models allow for matching mentors and learners based on their skills.
+so like that all session and all needed to store message and all shwould be saved like session detail type and all needed for video chat session
+using websocket anfd webRTC for real-time communication.
+And also can report and review system for both mentors and learners after the session is completed.
+And admin can monitor and enter in realtime sessions if needed for quality control. So session for admin should be opened all the time for monitoring purposes.
+
+so create all needed models for the above requirements in the Prisma schema.
