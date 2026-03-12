@@ -60,6 +60,7 @@ model User {
   Status               UserStatus @default(Active)
   ProfileImageURL      String?
   CreatedAt            DateTime   @default(now())
+  UpdatedAt            DateTime   @default(now()) @updatedAt
   PasswordResetToken   String?
   PasswordResetExpires DateTime?
   

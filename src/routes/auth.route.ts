@@ -15,7 +15,6 @@ import { cacheMiddleware } from "../middlewares/cache.middleware";
 
 const router = Router();
 
-// ==================== PUBLIC ROUTES ====================
 // POST requests - NO CACHE
 router.post("/register", registerUser);
 router.post("/login", loginUser);
@@ -33,7 +32,6 @@ router.get(
   checkEmailAvailability
 );
 
-// ==================== PROTECTED ROUTES ====================
 router.use(authenticateJWT);
 
 // POST requests - NO CACHE
