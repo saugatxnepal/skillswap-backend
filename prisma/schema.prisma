@@ -12,6 +12,12 @@ enum Role {
   Learner
 }
 
+enum UserStatus {
+  Active
+  Inactive
+  Banned
+}
+
 enum SessionStatus {
   PENDING_MATCH
   SCHEDULED
@@ -51,6 +57,7 @@ model User {
   PasswordHash         String
   Role                 Role       @default(Learner)
   Bio                  String?
+  Status               UserStatus @default(Active)
   ProfileImageURL      String?
   CreatedAt            DateTime   @default(now())
   PasswordResetToken   String?
