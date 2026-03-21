@@ -1,11 +1,9 @@
 import { Router } from "express";
 import {
-  // Public/Protected routes (use JWT)
   getCurrentUserProfile,
   updateCurrentUserProfile,
   updateUserPassword,
-  
-  // Admin routes
+  updateNotificationPreferences,
   getAllUsers,
   getUserById,
   updateUserProfileById,
@@ -14,9 +12,10 @@ import {
   deleteUser,
   getUserStats,
 } from "../controllers/user.controller";
-import { authenticateJWT } from "../middlewares/auth.middleware";
+import { authenticateJWT, authorizeRoles } from "../middlewares/auth.middleware";
 import { cacheMiddleware } from "../middlewares/cache.middleware";
 import { createUploader } from "../middlewares/uploadHandler";
+import { Role } from "../constants/roles";
 
 const router = Router();
 
@@ -42,16 +41,22 @@ router.patch("/me", profileUpload.single('profileImage'), updateCurrentUserProfi
 router.put("/me/password", updateUserPassword);
 router.patch("/me/password", updateUserPassword);
 
+// Notification preferences
+router.put("/me/notifications", updateNotificationPreferences);
+router.patch("/me/notifications", updateNotificationPreferences);
+
 // ==================== ADMIN ROUTES (require admin role) ====================
 // GET requests with cache
 router.get(
   "/", 
+  authorizeRoles(Role.Admin), // Pass the string "Admin"
   cacheMiddleware({ ttl: 300, keyPrefix: 'users' }), 
   getAllUsers
 );
 
 router.get(
   "/stats", 
+  authorizeRoles(Role.Admin), // Pass the string "Admin"
   cacheMiddleware({ ttl: 3600, keyPrefix: 'user-stats' }), 
   getUserStats
 );
@@ -63,10 +68,32 @@ router.get(
 );
 
 // Admin update routes (with file upload support)
-router.put("/:id", profileUpload.single('profileImage'), updateUserProfileById);
-router.patch("/:id", profileUpload.single('profileImage'), updateUserProfileById);
-router.patch("/:id/role", updateUserRole);
-router.patch("/:id/status", updateUserStatus);
-router.delete("/:id", deleteUser);
+router.put(
+  "/:id", 
+  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  profileUpload.single('profileImage'), 
+  updateUserProfileById
+);
+router.patch(
+  "/:id", 
+  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  profileUpload.single('profileImage'), 
+  updateUserProfileById
+);
+router.patch(
+  "/:id/role", 
+  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  updateUserRole
+);
+router.patch(
+  "/:id/status", 
+  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  updateUserStatus
+);
+router.delete(
+  "/:id", 
+  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  deleteUser
+);
 
 export default router;

@@ -7,18 +7,7 @@ import { CacheKeys } from "../utils/cacheKeys.util";
 import { comparePassword, hashPassword } from "../utils/hash.util";
 import fs from "fs";
 import path from "path";
-
-enum Role {
-  Admin = "Admin",
-  Mentor = "Mentor",
-  Learner = "Learner",
-}
-
-enum UserStatus {
-  Active = "Active",
-  Inactive = "Inactive",
-  Banned = "Banned",
-}
+import { Role, UserStatus } from "../constants/roles";
 
 // Helper function to safely get string from query parameter
 const getQueryString = (param: any): string | undefined => {
@@ -44,10 +33,8 @@ const getBaseUrl = (req: Request): string => {
 const deleteOldProfileImage = async (imageUrl: string) => {
   if (!imageUrl) return;
   
-  // Check if it's a local file (starts with /uploads/)
   if (imageUrl.includes('/uploads/')) {
     try {
-      // Extract filename from URL
       const urlParts = imageUrl.split('/uploads/');
       if (urlParts.length > 1) {
         const filePath = path.join(__dirname, '../../uploads', urlParts[1]);
@@ -77,7 +64,6 @@ export const getCurrentUserProfile = asyncHandler(
         });
       }
 
-      // Try to get from cache
       const cacheKey = CacheKeys.userProfile(currentUserId);
       let user = await RedisService.get(cacheKey);
 
@@ -86,7 +72,7 @@ export const getCurrentUserProfile = asyncHandler(
 
         const result = await query(
           `SELECT "UserID", "FullName", "Email", "Role", "Status", "Bio", 
-                  "ProfileImageURL", "CreatedAt"
+                  "ProfileImageURL", "Timezone", "NotificationPreferences", "CreatedAt"
            FROM "User" 
            WHERE "UserID" = $1`,
           [currentUserId],
@@ -131,13 +117,10 @@ export const updateCurrentUserProfile = asyncHandler(
     try {
       const currentUserId = (req as any).user?.UserID;
       
-      // Get text fields from body
-      const { fullName, bio } = req.body;
+      const { fullName, bio, timezone, notificationPreferences } = req.body;
       
-      // Handle file upload if present
       let profileImageURL = undefined;
       if (req.file) {
-        const baseUrl = getBaseUrl(req);
         profileImageURL = `/uploads/profiles/${req.file.filename}`;
       }
 
@@ -148,7 +131,6 @@ export const updateCurrentUserProfile = asyncHandler(
         });
       }
 
-      // Check if user exists and get current profile image
       const existingUser = await query(
         `SELECT * FROM "User" WHERE "UserID" = $1`,
         [currentUserId],
@@ -161,7 +143,6 @@ export const updateCurrentUserProfile = asyncHandler(
         });
       }
 
-      // Build update query dynamically based on provided fields
       const updates: string[] = [];
       const values: any[] = [];
       let paramCount = 0;
@@ -178,12 +159,22 @@ export const updateCurrentUserProfile = asyncHandler(
         values.push(bio || null);
       }
 
+      if (timezone !== undefined) {
+        paramCount++;
+        updates.push(`"Timezone" = $${paramCount}`);
+        values.push(timezone || 'UTC');
+      }
+
+      if (notificationPreferences !== undefined) {
+        paramCount++;
+        updates.push(`"NotificationPreferences" = $${paramCount}`);
+        values.push(notificationPreferences);
+      }
+
       if (profileImageURL !== undefined) {
         paramCount++;
         updates.push(`"ProfileImageURL" = $${paramCount}`);
         values.push(profileImageURL);
-        
-        // Delete old profile image
         await deleteOldProfileImage(existingUser.rows[0].ProfileImageURL);
       }
 
@@ -194,24 +185,21 @@ export const updateCurrentUserProfile = asyncHandler(
         });
       }
 
-      // Add updated timestamp
       paramCount++;
       updates.push(`"UpdatedAt" = NOW()`);
-
-      // Add user ID as last parameter
       values.push(currentUserId);
 
       const updateQuery = `
         UPDATE "User" 
         SET ${updates.join(', ')}
         WHERE "UserID" = $${paramCount}
-        RETURNING "UserID", "FullName", "Email", "Role", "Status", "Bio", "ProfileImageURL", "CreatedAt"
+        RETURNING "UserID", "FullName", "Email", "Role", "Status", "Bio", 
+                  "ProfileImageURL", "Timezone", "NotificationPreferences", "CreatedAt"
       `;
 
       const updateResult = await query(updateQuery, values);
       const updatedUser = updateResult.rows[0];
 
-      // Clear all related caches
       await RedisService.del(CacheKeys.user(currentUserId));
       await RedisService.del(CacheKeys.userProfile(currentUserId));
       await RedisService.del(CacheKeys.userByEmail(updatedUser.Email));
@@ -237,7 +225,7 @@ export const updateCurrentUserProfile = asyncHandler(
   },
 );
 
-// Update user password (with current password verification)
+// Update user password
 export const updateUserPassword = asyncHandler(
   async (req: Request, res: Response) => {
     try {
@@ -251,7 +239,6 @@ export const updateUserPassword = asyncHandler(
         });
       }
 
-      // Validation
       if (!currentPassword || !newPassword) {
         return res.status(400).json({
           success: false,
@@ -266,7 +253,6 @@ export const updateUserPassword = asyncHandler(
         });
       }
 
-      // Get user with password hash
       const userResult = await query(
         `SELECT "PasswordHash" FROM "User" WHERE "UserID" = $1`,
         [currentUserId],
@@ -279,7 +265,6 @@ export const updateUserPassword = asyncHandler(
         });
       }
 
-      // Verify current password
       const isValid = await comparePassword(currentPassword, userResult.rows[0].PasswordHash);
       if (!isValid) {
         return res.status(400).json({
@@ -288,10 +273,8 @@ export const updateUserPassword = asyncHandler(
         });
       }
 
-      // Hash new password
       const newPasswordHash = await hashPassword(newPassword);
 
-      // Update password
       await query(
         `UPDATE "User" 
          SET "PasswordHash" = $1, "UpdatedAt" = NOW()
@@ -299,7 +282,6 @@ export const updateUserPassword = asyncHandler(
         [newPasswordHash, currentUserId],
       );
 
-      // Clear all caches (force re-login)
       await RedisService.del(CacheKeys.user(currentUserId));
       await RedisService.del(CacheKeys.userProfile(currentUserId));
       await RedisService.delPattern(`session:${currentUserId}:*`);
@@ -323,15 +305,63 @@ export const updateUserPassword = asyncHandler(
   },
 );
 
+// Update notification preferences
+export const updateNotificationPreferences = asyncHandler(
+  async (req: Request, res: Response) => {
+    try {
+      const currentUserId = (req as any).user?.UserID;
+      const { email, inApp } = req.body;
+
+      if (!currentUserId) {
+        return res.status(401).json({
+          success: false,
+          errors: [formatError("auth", "User not authenticated")],
+        });
+      }
+
+      const preferences = {
+        email: email !== undefined ? email : true,
+        inApp: inApp !== undefined ? inApp : true,
+      };
+
+      const result = await query(
+        `UPDATE "User" 
+         SET "NotificationPreferences" = $1, "UpdatedAt" = NOW()
+         WHERE "UserID" = $2
+         RETURNING "NotificationPreferences"`,
+        [preferences, currentUserId],
+      );
+
+      await RedisService.del(CacheKeys.userProfile(currentUserId));
+
+      return res.status(200).json({
+        success: true,
+        data: result.rows[0].NotificationPreferences,
+        message: "Notification preferences updated",
+      });
+    } catch (error) {
+      console.error("Update notification preferences error:", error);
+      return res.status(500).json({
+        success: false,
+        errors: [
+          formatError(
+            "server",
+            "Internal server error: " + (error as Error).message,
+          ),
+        ],
+      });
+    }
+  },
+);
+
 // ==================== ADMIN ROUTES ====================
 
-// Get all users (Admin only) with pagination and search
+// Get all users (Admin only)
 export const getAllUsers = asyncHandler(
   async (req: Request, res: Response) => {
     try {
       const currentUserRole = (req as any).user?.role;
 
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -346,9 +376,7 @@ export const getAllUsers = asyncHandler(
       const role = getQueryString(req.query.role);
       const status = getQueryString(req.query.status);
 
-      // Try to get from cache
       const cacheKey = CacheKeys.users(page, limit);
-      
       let cachedData = await RedisService.get(cacheKey);
 
       if (cachedData) {
@@ -361,10 +389,9 @@ export const getAllUsers = asyncHandler(
 
       console.log("Users not in cache, fetching from database...");
 
-      // Build query with filters
       let queryText = `
         SELECT "UserID", "FullName", "Email", "Role", "Status", "Bio", 
-               "ProfileImageURL", "CreatedAt"
+               "ProfileImageURL", "Timezone", "CreatedAt"
         FROM "User"
         WHERE 1=1
       `;
@@ -389,7 +416,6 @@ export const getAllUsers = asyncHandler(
         queryParams.push(status);
       }
 
-      // Get total count
       let countQuery = `SELECT COUNT(*) FROM "User" WHERE 1=1`;
       const countParams: any[] = [];
       
@@ -411,7 +437,6 @@ export const getAllUsers = asyncHandler(
       const countResult = await query(countQuery, countParams);
       const total = parseInt(countResult.rows[0].count);
 
-      // Add pagination
       queryText += ` ORDER BY "CreatedAt" DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
       queryParams.push(limit, offset);
 
@@ -427,7 +452,6 @@ export const getAllUsers = asyncHandler(
         },
       };
 
-      // Cache for 5 minutes (300 seconds)
       await RedisService.setEx(cacheKey, 300, response);
 
       return res.status(200).json({
@@ -454,7 +478,6 @@ export const getAllUsers = asyncHandler(
 export const getUserById = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Ensure id is treated as a string
       const idParam = req.params.id;
       const targetUserId = Array.isArray(idParam) ? idParam[0] : idParam;
       const currentUserId = (req as any).user?.UserID;
@@ -467,7 +490,6 @@ export const getUserById = asyncHandler(
         });
       }
 
-      // Check if user is admin or accessing their own profile
       if (currentUserRole !== Role.Admin && currentUserId !== targetUserId) {
         return res.status(403).json({
           success: false,
@@ -475,7 +497,6 @@ export const getUserById = asyncHandler(
         });
       }
 
-      // Try to get from cache
       const cacheKey = CacheKeys.user(targetUserId);
       let user = await RedisService.get(cacheKey);
 
@@ -484,7 +505,7 @@ export const getUserById = asyncHandler(
 
         const result = await query(
           `SELECT "UserID", "FullName", "Email", "Role", "Status", "Bio", 
-                  "ProfileImageURL", "CreatedAt"
+                  "ProfileImageURL", "Timezone", "NotificationPreferences", "CreatedAt"
            FROM "User" 
            WHERE "UserID" = $1`,
           [targetUserId],
@@ -499,7 +520,6 @@ export const getUserById = asyncHandler(
 
         user = result.rows[0];
 
-        // Cache for 1 hour (3600 seconds)
         await RedisService.setEx(cacheKey, 3600, user);
       }
 
@@ -523,22 +543,18 @@ export const getUserById = asyncHandler(
   },
 );
 
-// Update user profile by ID (Admin only) - with file upload support
+// Update user profile by ID (Admin only)
 export const updateUserProfileById = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Ensure id is treated as a string
       const idParam = req.params.id;
       const targetUserId = Array.isArray(idParam) ? idParam[0] : idParam;
       const currentUserRole = (req as any).user?.role;
 
-      // Get text fields from body
-      const { fullName, bio } = req.body;
+      const { fullName, bio, timezone, status, notificationPreferences } = req.body;
       
-      // Handle file upload if present
       let profileImageURL = undefined;
       if (req.file) {
-        const baseUrl = getBaseUrl(req);
         profileImageURL = `/uploads/profiles/${req.file.filename}`;
       }
 
@@ -549,7 +565,6 @@ export const updateUserProfileById = asyncHandler(
         });
       }
 
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -557,7 +572,6 @@ export const updateUserProfileById = asyncHandler(
         });
       }
 
-      // Check if user exists and get current profile image
       const existingUser = await query(
         `SELECT * FROM "User" WHERE "UserID" = $1`,
         [targetUserId],
@@ -570,7 +584,6 @@ export const updateUserProfileById = asyncHandler(
         });
       }
 
-      // Build update query dynamically based on provided fields
       const updates: string[] = [];
       const values: any[] = [];
       let paramCount = 0;
@@ -587,12 +600,28 @@ export const updateUserProfileById = asyncHandler(
         values.push(bio || null);
       }
 
+      if (timezone !== undefined) {
+        paramCount++;
+        updates.push(`"Timezone" = $${paramCount}`);
+        values.push(timezone);
+      }
+
+      if (status !== undefined && Object.values(UserStatus).includes(status)) {
+        paramCount++;
+        updates.push(`"Status" = $${paramCount}`);
+        values.push(status);
+      }
+
+      if (notificationPreferences !== undefined) {
+        paramCount++;
+        updates.push(`"NotificationPreferences" = $${paramCount}`);
+        values.push(notificationPreferences);
+      }
+
       if (profileImageURL !== undefined) {
         paramCount++;
         updates.push(`"ProfileImageURL" = $${paramCount}`);
         values.push(profileImageURL);
-        
-        // Delete old profile image
         await deleteOldProfileImage(existingUser.rows[0].ProfileImageURL);
       }
 
@@ -603,24 +632,21 @@ export const updateUserProfileById = asyncHandler(
         });
       }
 
-      // Add updated timestamp
       paramCount++;
       updates.push(`"UpdatedAt" = NOW()`);
-
-      // Add user ID as last parameter
       values.push(targetUserId);
 
       const updateQuery = `
         UPDATE "User" 
         SET ${updates.join(', ')}
         WHERE "UserID" = $${paramCount}
-        RETURNING "UserID", "FullName", "Email", "Role", "Status", "Bio", "ProfileImageURL", "CreatedAt"
+        RETURNING "UserID", "FullName", "Email", "Role", "Status", "Bio", 
+                  "ProfileImageURL", "Timezone", "NotificationPreferences", "CreatedAt"
       `;
 
       const updateResult = await query(updateQuery, values);
       const updatedUser = updateResult.rows[0];
 
-      // Clear all related caches
       await RedisService.del(CacheKeys.user(targetUserId));
       await RedisService.del(CacheKeys.userProfile(targetUserId));
       await RedisService.del(CacheKeys.userByEmail(updatedUser.Email));
@@ -650,7 +676,6 @@ export const updateUserProfileById = asyncHandler(
 export const updateUserRole = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Ensure id is treated as a string
       const idParam = req.params.id;
       const targetUserId = Array.isArray(idParam) ? idParam[0] : idParam;
       const currentUserRole = (req as any).user?.role;
@@ -663,7 +688,6 @@ export const updateUserRole = asyncHandler(
         });
       }
 
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -671,7 +695,6 @@ export const updateUserRole = asyncHandler(
         });
       }
 
-      // Validate role
       if (!role || !Object.values(Role).includes(role)) {
         return res.status(400).json({
           success: false,
@@ -679,7 +702,6 @@ export const updateUserRole = asyncHandler(
         });
       }
 
-      // Check if user exists
       const existingUser = await query(
         `SELECT * FROM "User" WHERE "UserID" = $1`,
         [targetUserId],
@@ -692,7 +714,6 @@ export const updateUserRole = asyncHandler(
         });
       }
 
-      // Prevent admin from changing their own role
       if (targetUserId === (req as any).user?.UserID) {
         return res.status(400).json({
           success: false,
@@ -700,7 +721,6 @@ export const updateUserRole = asyncHandler(
         });
       }
 
-      // Update role
       const updateResult = await query(
         `UPDATE "User" 
          SET "Role" = $1, "UpdatedAt" = NOW()
@@ -711,7 +731,6 @@ export const updateUserRole = asyncHandler(
 
       const updatedUser = updateResult.rows[0];
 
-      // Clear all related caches
       await RedisService.del(CacheKeys.user(targetUserId));
       await RedisService.del(CacheKeys.userProfile(targetUserId));
       await RedisService.del(CacheKeys.userByEmail(updatedUser.Email));
@@ -741,7 +760,6 @@ export const updateUserRole = asyncHandler(
 export const updateUserStatus = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Ensure id is treated as a string
       const idParam = req.params.id;
       const targetUserId = Array.isArray(idParam) ? idParam[0] : idParam;
       const currentUserRole = (req as any).user?.role;
@@ -754,7 +772,6 @@ export const updateUserStatus = asyncHandler(
         });
       }
 
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -762,7 +779,6 @@ export const updateUserStatus = asyncHandler(
         });
       }
 
-      // Validate status
       if (!status || !Object.values(UserStatus).includes(status)) {
         return res.status(400).json({
           success: false,
@@ -770,7 +786,6 @@ export const updateUserStatus = asyncHandler(
         });
       }
 
-      // Check if user exists
       const existingUser = await query(
         `SELECT * FROM "User" WHERE "UserID" = $1`,
         [targetUserId],
@@ -783,7 +798,6 @@ export const updateUserStatus = asyncHandler(
         });
       }
 
-      // Prevent admin from changing their own status
       if (targetUserId === (req as any).user?.UserID) {
         return res.status(400).json({
           success: false,
@@ -791,7 +805,6 @@ export const updateUserStatus = asyncHandler(
         });
       }
 
-      // Update status
       const updateResult = await query(
         `UPDATE "User" 
          SET "Status" = $1, "UpdatedAt" = NOW()
@@ -802,7 +815,6 @@ export const updateUserStatus = asyncHandler(
 
       const updatedUser = updateResult.rows[0];
 
-      // Clear all related caches
       await RedisService.del(CacheKeys.user(targetUserId));
       await RedisService.del(CacheKeys.userProfile(targetUserId));
       await RedisService.del(CacheKeys.userByEmail(updatedUser.Email));
@@ -832,7 +844,6 @@ export const updateUserStatus = asyncHandler(
 export const deleteUser = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Ensure id is treated as a string
       const idParam = req.params.id;
       const targetUserId = Array.isArray(idParam) ? idParam[0] : idParam;
       const currentUserRole = (req as any).user?.role;
@@ -844,7 +855,6 @@ export const deleteUser = asyncHandler(
         });
       }
 
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -852,7 +862,6 @@ export const deleteUser = asyncHandler(
         });
       }
 
-      // Check if user exists
       const existingUser = await query(
         `SELECT * FROM "User" WHERE "UserID" = $1`,
         [targetUserId],
@@ -865,7 +874,6 @@ export const deleteUser = asyncHandler(
         });
       }
 
-      // Prevent admin from deleting themselves
       if (targetUserId === (req as any).user?.UserID) {
         return res.status(400).json({
           success: false,
@@ -873,20 +881,16 @@ export const deleteUser = asyncHandler(
         });
       }
 
-      // Get user email and profile image for cache clearing and cleanup
       const userEmail = existingUser.rows[0].Email;
       const profileImageUrl = existingUser.rows[0].ProfileImageURL;
 
-      // Delete profile image file if exists
       await deleteOldProfileImage(profileImageUrl);
 
-      // Delete user (cascading delete should handle related records)
       await query(
         `DELETE FROM "User" WHERE "UserID" = $1`,
         [targetUserId],
       );
 
-      // Clear all related caches
       await RedisService.del(CacheKeys.user(targetUserId));
       await RedisService.del(CacheKeys.userProfile(targetUserId));
       await RedisService.del(CacheKeys.userByEmail(userEmail));
@@ -919,7 +923,6 @@ export const getUserStats = asyncHandler(
     try {
       const currentUserRole = (req as any).user?.role;
 
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -927,7 +930,6 @@ export const getUserStats = asyncHandler(
         });
       }
 
-      // Try to get from cache
       const cacheKey = 'user:stats';
       let stats = await RedisService.get(cacheKey);
 
@@ -960,7 +962,6 @@ export const getUserStats = asyncHandler(
           new_users_month: 0,
         };
 
-        // Cache for 1 hour
         await RedisService.setEx(cacheKey, 3600, stats);
       }
 

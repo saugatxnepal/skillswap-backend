@@ -9,18 +9,7 @@ import { RedisService } from "../utils/redis.util";
 import { CacheKeys } from "../utils/cacheKeys.util";
 import crypto from "crypto";
 import redisClient from "../config/redis";
-
-enum Role {
-  Admin = "Admin",
-  Mentor = "Mentor",
-  Learner = "Learner",
-}
-
-enum UserStatus {
-  Active = "Active",
-  Inactive = "Inactive",
-  Banned = "Banned",
-}
+import { Role, UserStatus } from "../constants/roles";
 
 // Register User
 export const registerUser = asyncHandler(

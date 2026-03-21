@@ -6,6 +6,8 @@ export const CacheKeys = {
   userProfile: (userId: string) => `user:profile:${userId}`,
   userSessions: (userId: string) => `user:${userId}:sessions`,
   userActivity: (userId: string) => `user:${userId}:activity`,
+  userSkills: (userId: string) => `user:${userId}:skills`,
+  userAvailability: (userId: string) => `user:${userId}:availability`,
   
   // Auth related
   verificationToken: (token: string) => `verify:${token}`,
@@ -36,6 +38,19 @@ export const CacheKeys = {
   },
   skillsByCategory: (categoryId: string) => `skills:category:${categoryId}`,
   popularSkills: (limit?: number) => `skills:popular:limit:${limit || 10}`,
+  
+  // ========== MENTOR SPECIFIC KEYS ==========
+  mentorSkills: (mentorId: string, includeUnavailable?: boolean) => 
+    `mentor:${mentorId}:skills:${includeUnavailable ? 'all' : 'available'}`,
+  mentorAvailability: (mentorId: string) => `mentor:${mentorId}:availability`,
+  mentorSessions: (mentorId: string, status?: string, page?: number, limit?: number) => 
+    `mentor:${mentorId}:sessions:${status || 'all'}:page:${page || 1}:limit:${limit || 10}`,
+  
+  // ========== SESSION KEYS ==========
+  session: (sessionId: string) => `session:${sessionId}`,
+  sessionDetails: (sessionId: string) => `session:${sessionId}:details`,
+  sessionMessages: (sessionId: string, page?: number, limit?: number) => 
+    `session:${sessionId}:messages:page:${page || 1}:limit:${limit || 50}`,
   
   // Helper method to delete patterns
   deletePattern: (pattern: string) => pattern,

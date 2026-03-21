@@ -50,6 +50,32 @@ enum ReportReason {
   OTHER
 }
 
+enum InviteStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+enum SessionType {
+  VIDEO
+  CHAT
+  HYBRID
+}
+
+enum NotificationType {
+  SESSION_SCHEDULED
+  SESSION_REMINDER
+  NEW_MESSAGE
+  MATCH_FOUND
+  SESSION_CANCELLED
+  SESSION_COMPLETED
+  REVIEW_RECEIVED
+  REPORT_RESOLVED
+  MENTOR_REQUEST
+  LEARNER_REQUEST
+}
+
 model User {
   UserID               String     @id @default(uuid())
   FullName             String
@@ -59,6 +85,8 @@ model User {
   Bio                  String?
   Status               UserStatus @default(Active)
   ProfileImageURL      String?
+  Timezone             String?    @default("UTC")
+  NotificationPreferences Json?   @default("{\"email\": true, \"inApp\": true}")
   CreatedAt            DateTime   @default(now())
   UpdatedAt            DateTime   @default(now()) @updatedAt
   PasswordResetToken   String?
@@ -81,24 +109,35 @@ model User {
   adminActions         AdminAction[] @relation("AdminActions")
   targetedByActions    AdminAction[] @relation("TargetedUserActions")
   sessionMonitoringLogs SessionMonitoringLog[] @relation("AdminMonitoringLogs")
+  sessionInvitesSent   SessionInvite[] @relation("Inviter")
+  sessionInvitesReceived SessionInvite[] @relation("Invitee")
+  sessionQuestions     SessionQuestion[]
+  meetingRecordings    MeetingRecording[]
 }
 
 model Skill {
   SkillID          String         @id @default(uuid())
   Name             String
   Description      String?
+  DetailedContent  String?
+  IsAvailable      Boolean        @default(true)
   SkillCategoryID  String
   SkillCategory    SkillCategory  @relation(fields: [SkillCategoryID], references: [SkillCategoryID])
   
   // Relations
   userSkills       UserSkill[]
   sessionSkills    SessionSkill[]
+  
+  @@index([IsAvailable])
+  @@index([SkillCategoryID])
 }
 
 model SkillCategory {
   SkillCategoryID String   @id @default(uuid())
-  Name            String
+  Name            String   @unique
   Description     String?
+  Icon            String?
+  DisplayOrder    Int      @default(0)
   
   // Relations
   Skills          Skill[]
@@ -110,12 +149,16 @@ model UserSkill {
   User            User     @relation(fields: [UserID], references: [UserID])
   SkillID         String
   Skill           Skill    @relation(fields: [SkillID], references: [SkillID])
-  IsMentor        Boolean  @default(false) // true if user wants to mentor this skill
-  IsLearner       Boolean  @default(true)  // true if user wants to learn this skill
+  IsMentor        Boolean  @default(false)
+  IsLearner       Boolean  @default(true)
   ExperienceLevel Int?     // 1-5 scale
+  TeachingStyle   String?  // e.g., "structured", "flexible", "project-based"
   CreatedAt       DateTime @default(now())
+  UpdatedAt       DateTime @updatedAt
   
   @@unique([UserID, SkillID])
+  @@index([UserID, IsMentor])
+  @@index([SkillID, IsMentor])
 }
 
 model Session {
@@ -127,12 +170,16 @@ model Session {
   MentorID        String?
   Mentor          User?         @relation("MentorSessions", fields: [MentorID], references: [UserID])
   Status          SessionStatus @default(PENDING_MATCH)
+  SessionType     SessionType   @default(VIDEO)
   ScheduledStart  DateTime?
   ScheduledEnd    DateTime?
   ActualStartTime DateTime?
   ActualEndTime   DateTime?
-  MeetingLink     String?       // Google Meet link
-  MeetingProvider String?       // e.g., "google_meet"
+  MeetingLink     String?
+  MeetingRoomId   String?
+  MeetingProvider String?       // "google_meet", "zoom", "jitsi"
+  RecordingUrl    String?
+  Duration        Int?          // Actual duration in minutes
   CreatedAt       DateTime      @default(now())
   UpdatedAt       DateTime      @updatedAt
   
@@ -146,6 +193,14 @@ model Session {
   adminActions    AdminAction[] @relation("SessionAdminActions")
   webRTCLogs      WebRTCLog[]   @relation("SessionWebRTCLogs")
   monitoringLogs  SessionMonitoringLog[] @relation("SessionMonitoringLogs")
+  invites         SessionInvite[]
+  questions       SessionQuestion[]
+  recordings      MeetingRecording[]
+  
+  @@index([Status])
+  @@index([ScheduledStart])
+  @@index([MentorID, Status])
+  @@index([LearnerID, Status])
 }
 
 model SessionSkill {
@@ -154,19 +209,27 @@ model SessionSkill {
   Session        Session @relation(fields: [SessionID], references: [SessionID])
   SkillID        String
   Skill          Skill   @relation(fields: [SkillID], references: [SkillID])
+  CreatedAt      DateTime @default(now())
   
   @@unique([SessionID, SkillID])
+  @@index([SkillID])
 }
 
 model SessionParticipant {
-  ParticipantID String   @id @default(uuid())
-  SessionID     String
-  Session       Session  @relation("SessionParticipants", fields: [SessionID], references: [SessionID])
-  UserID        String
-  User          User     @relation("ParticipantSessions", fields: [UserID], references: [UserID])
-  JoinedAt      DateTime?
-  LeftAt        DateTime?
-  IsAdminMonitor Boolean @default(false) // For admin monitoring
+  ParticipantID   String   @id @default(uuid())
+  SessionID       String
+  Session         Session  @relation("SessionParticipants", fields: [SessionID], references: [SessionID])
+  UserID          String
+  User            User     @relation("ParticipantSessions", fields: [UserID], references: [UserID])
+  Role            String   // "mentor", "learner", "admin_monitor"
+  JoinedAt        DateTime?
+  LeftAt          DateTime?
+  IsActive        Boolean  @default(true)
+  ConnectionQuality String? // "good", "poor", "excellent"
+  CreatedAt       DateTime @default(now())
+  
+  @@unique([SessionID, UserID])
+  @@index([UserID])
 }
 
 model TimeSlot {
@@ -178,8 +241,12 @@ model TimeSlot {
   StartTime     DateTime
   EndTime       DateTime
   IsAvailable   Boolean  @default(true)
-  IsSelected    Boolean  @default(false) // When both agree on this slot
+  IsSelected    Boolean  @default(false)
+  SelectedBy    String?  // UserID of who selected this slot
   CreatedAt     DateTime @default(now())
+  
+  @@index([SessionID, IsSelected])
+  @@index([StartTime])
 }
 
 model Availability {
@@ -190,8 +257,32 @@ model Availability {
   StartTime      String   // Format: "HH:MM"
   EndTime        String   // Format: "HH:MM"
   IsRecurring    Boolean  @default(true)
-  SpecificDate   DateTime? // For one-time availability
+  SpecificDate   DateTime?
+  IsActive       Boolean  @default(true)
   CreatedAt      DateTime @default(now())
+  UpdatedAt      DateTime @updatedAt
+  
+  @@index([UserID, IsRecurring])
+  @@index([SpecificDate])
+}
+
+model SessionInvite {
+  InviteID      String       @id @default(uuid())
+  SessionID     String
+  Session       Session      @relation(fields: [SessionID], references: [SessionID])
+  InviterID     String
+  Inviter       User         @relation("Inviter", fields: [InviterID], references: [UserID])
+  InviteeID     String
+  Invitee       User         @relation("Invitee", fields: [InviteeID], references: [UserID])
+  Status        InviteStatus @default(PENDING)
+  Message       String?
+  ExpiresAt     DateTime
+  RespondedAt   DateTime?
+  CreatedAt     DateTime     @default(now())
+  
+  @@unique([SessionID, InviteeID])
+  @@index([InviteeID, Status])
+  @@index([ExpiresAt])
 }
 
 model Message {
@@ -203,11 +294,49 @@ model Message {
   Content       String
   MessageType   MessageType @default(TEXT)
   FileURL       String?
+  FileName      String?
+  FileSize      Int?
   ReadAt        DateTime?
+  IsEdited      Boolean     @default(false)
+  EditedAt      DateTime?
+  ReplyToID     String?     // MessageID being replied to
   CreatedAt     DateTime    @default(now())
   UpdatedAt     DateTime    @updatedAt
   
   @@index([SessionID, CreatedAt])
+  @@index([SenderID])
+}
+
+model SessionQuestion {
+  QuestionID    String   @id @default(uuid())
+  SessionID     String
+  Session       Session  @relation(fields: [SessionID], references: [SessionID])
+  UserID        String
+  User          User     @relation(fields: [UserID], references: [UserID])
+  Question      String
+  Answer        String?
+  IsAnswered    Boolean  @default(false)
+  AnsweredBy    String?  // UserID who answered
+  AnsweredAt    DateTime?
+  CreatedAt     DateTime @default(now())
+  
+  @@index([SessionID, IsAnswered])
+}
+
+model MeetingRecording {
+  RecordingID   String   @id @default(uuid())
+  SessionID     String
+  Session       Session  @relation(fields: [SessionID], references: [SessionID])
+  UserID        String   // User who recorded
+  User          User     @relation(fields: [UserID], references: [UserID])
+  RecordingUrl  String
+  Duration      Int?     // in seconds
+  FileSize      BigInt?
+  Status        String   @default("processing") // processing, ready, failed
+  IsArchived    Boolean  @default(false)
+  CreatedAt     DateTime @default(now())
+  
+  @@index([SessionID])
 }
 
 model Review {
@@ -221,9 +350,14 @@ model Review {
   Rating         Int      // 1-5 stars
   Comment        String?
   IsMentorReview Boolean  // true if reviewing mentor, false if reviewing learner
+  Tags           String[] // e.g., ["knowledgeable", "patient", "clear"]
+  IsPublic       Boolean  @default(true)
   CreatedAt      DateTime @default(now())
+  UpdatedAt      DateTime @updatedAt
   
   @@unique([SessionID, ReviewerID, RevieweeID])
+  @@index([RevieweeID, Rating])
+  @@index([IsMentorReview])
 }
 
 model Report {
@@ -236,47 +370,64 @@ model Report {
   ReportedUser   User         @relation("ReportsReceived", fields: [ReportedUserID], references: [UserID])
   Reason         ReportReason
   Description    String
+  Evidence       Json?        // Array of file URLs, screenshots
   Status         ReportStatus @default(PENDING)
   AdminNotes     String?
+  ResolvedBy     String?      // AdminID who resolved
   CreatedAt      DateTime     @default(now())
   ResolvedAt     DateTime?
+  
+  @@index([ReportedUserID, Status])
+  @@index([Status])
 }
 
 model AdminAction {
   ActionID      String   @id @default(uuid())
   AdminID       String
   Admin         User     @relation("AdminActions", fields: [AdminID], references: [UserID])
-  ActionType    String   // e.g., "WARNING", "SUSPENSION", "SESSION_MONITOR"
+  ActionType    String   // WARNING, SUSPENSION, BAN, SESSION_MONITOR, RESOLVE_REPORT
   TargetUserID  String?
   TargetUser    User?    @relation("TargetedUserActions", fields: [TargetUserID], references: [UserID])
   SessionID     String?
   Session       Session? @relation("SessionAdminActions", fields: [SessionID], references: [SessionID])
   Description   String
+  Metadata      Json?    // Additional action-specific data
   CreatedAt     DateTime @default(now())
+  
+  @@index([AdminID])
+  @@index([TargetUserID])
 }
 
 model Notification {
-  NotificationID String   @id @default(uuid())
+  NotificationID String          @id @default(uuid())
   UserID         String
-  User           User     @relation("UserNotifications", fields: [UserID], references: [UserID])
-  Type           String   // e.g., "SESSION_SCHEDULED", "NEW_MESSAGE", "MATCH_FOUND"
+  User           User            @relation("UserNotifications", fields: [UserID], references: [UserID])
+  Type           NotificationType
   Title          String
   Content        String
-  IsRead         Boolean  @default(false)
-  Data           Json?    // Additional data as JSON
-  CreatedAt      DateTime @default(now())
+  Data           Json?           // Additional data like sessionId, messageId
+  IsRead         Boolean         @default(false)
+  ReadAt         DateTime?
+  IsEmailSent    Boolean         @default(false)
+  EmailSentAt    DateTime?
+  CreatedAt      DateTime        @default(now())
+  
+  @@index([UserID, IsRead])
+  @@index([CreatedAt])
 }
 
-// For WebRTC signaling and session monitoring
 model WebRTCLog {
   LogID         String   @id @default(uuid())
   SessionID     String
   Session       Session  @relation("SessionWebRTCLogs", fields: [SessionID], references: [SessionID])
   UserID        String
   User          User     @relation("UserWebRTCLogs", fields: [UserID], references: [UserID])
-  EventType     String   // e.g., "CONNECTION", "DISCONNECTION", "ICE_CANDIDATE", "OFFER", "ANSWER"
-  Data          Json?    // WebRTC signaling data
+  EventType     String   // CONNECTION, DISCONNECTION, ICE_CANDIDATE, OFFER, ANSWER, ERROR
+  Data          Json?
   Timestamp     DateTime @default(now())
+  
+  @@index([SessionID, Timestamp])
+  @@index([UserID])
 }
 
 model SessionMonitoringLog {
@@ -285,7 +436,12 @@ model SessionMonitoringLog {
   Session       Session  @relation("SessionMonitoringLogs", fields: [SessionID], references: [SessionID])
   AdminID       String
   Admin         User     @relation("AdminMonitoringLogs", fields: [AdminID], references: [UserID])
+  Action        String   // JOINED, LEFT, MUTED, UNMUTED, WARNING_ISSUED, etc.
+  Notes         String?
+  Metadata      Json?
   JoinedAt      DateTime
   LeftAt        DateTime?
-  Notes         String?  // Admin notes during monitoring
+  CreatedAt     DateTime @default(now())
+  
+  @@index([SessionID])
 }

@@ -4,12 +4,7 @@ import { formatError } from "../utils/formatError";
 import { query } from "../db";
 import { RedisService } from "../utils/redis.util";
 import { CacheKeys } from "../utils/cacheKeys.util";
-
-enum Role {
-  Admin = "Admin",
-  Mentor = "Mentor",
-  Learner = "Learner",
-}
+import { Role } from "../constants/roles";
 
 // Helper function to safely get string from query parameter
 const getQueryString = (param: any): string | undefined => {
