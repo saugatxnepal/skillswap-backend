@@ -120,7 +120,7 @@ model Skill {
   Name             String
   Description      String?
   DetailedContent  String?
-  IsAvailable      Boolean        @default(true)
+  IsAvailable      Boolean        @default(true) 
   SkillCategoryID  String
   SkillCategory    SkillCategory  @relation(fields: [SkillCategoryID], references: [SkillCategoryID])
   

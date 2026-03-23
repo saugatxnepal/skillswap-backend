@@ -3,6 +3,9 @@ import cors from "cors";
 import path from "path";
 import authRoutes from "./routes/auth.route";
 import userRoutes from "./routes/user.route";
+import learnerRoutes from "./routes/learner.routes";
+import mentorRoutes from "./routes/mentor.routes";
+import sessionRoutes from "./routes/session.routes";
 import skillCategoryRoutes from "./routes/skillCategory.route";
 import { FRONTEND_URL } from "./config/env";
 import { errorHandler } from "./middlewares/errorHandler";
@@ -29,6 +32,9 @@ app.use(logger);
 app.use("/api/auth", authRoutes);
 app.use("/api/skill-categories", skillCategoryRoutes);
 app.use("/api/users", userRoutes);
+app.use("/api/learner", learnerRoutes);
+app.use("/api/mentor", mentorRoutes);
+app.use("/api/sessions", sessionRoutes);
 
 // Serve uploads folder as static
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
