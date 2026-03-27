@@ -124,11 +124,12 @@ export const addMentorSkill = asyncHandler(async (req: Request, res: Response) =
 
     const newSkill = skillResult.rows[0];
 
-    // Link skill to mentor
+    // Link skill to mentor - FIXED: Added UpdatedAt with NOW()
     const userSkillResult = await query(
       `INSERT INTO "UserSkill" 
-       ("UserSkillID", "UserID", "SkillID", "IsMentor", "IsLearner", "ExperienceLevel", "TeachingStyle")
-       VALUES (gen_random_uuid(), $1, $2, true, false, $3, $4)
+       ("UserSkillID", "UserID", "SkillID", "IsMentor", "IsLearner", 
+        "ExperienceLevel", "TeachingStyle", "CreatedAt", "UpdatedAt")
+       VALUES (gen_random_uuid(), $1, $2, true, false, $3, $4, NOW(), NOW())
        RETURNING *`,
       [userId, newSkill.SkillID, experienceLevel || null, teachingStyle || null]
     );
@@ -253,10 +254,11 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
         values.push(isAvailable);
       }
 
+      updates.push(`"UpdatedAt" = NOW()`);
       values.push(skillId);
       await query(
         `UPDATE "Skill" 
-         SET ${updates.join(', ')}, "UpdatedAt" = NOW()
+         SET ${updates.join(', ')}
          WHERE "SkillID" = $${paramCount}`,
         values
       );
@@ -277,10 +279,11 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
         values.push(teachingStyle);
       }
 
+      updates.push(`"UpdatedAt" = NOW()`);
       values.push(userId, skillId);
       await query(
         `UPDATE "UserSkill" 
-         SET ${updates.join(', ')}, "UpdatedAt" = NOW()
+         SET ${updates.join(', ')}
          WHERE "UserID" = $${paramCount} AND "SkillID" = $${paramCount + 1}`,
         values
       );
@@ -302,7 +305,6 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
     });
   }
 });
-
 // Toggle skill availability
 export const toggleSkillAvailability = asyncHandler(async (req: Request, res: Response) => {
   try {
