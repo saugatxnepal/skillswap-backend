@@ -12,24 +12,20 @@ import {
   deleteUser,
   getUserStats,
 } from "../controllers/user.controller";
-import { authenticateJWT, authorizeRoles } from "../middlewares/auth.middleware";
-import { cacheMiddleware } from "../middlewares/cache.middleware";
 import { createUploader } from "../middlewares/uploadHandler";
 import { Role } from "../constants/roles";
+import { authorizeRoles } from "../middlewares/auth.middleware";
 
 const router = Router();
 
 // Create uploader for profile images
 const profileUpload = createUploader('profiles');
 
-// All user routes require authentication
-router.use(authenticateJWT);
 
 // ==================== USER ROUTES (no ID needed, uses JWT token) ====================
 // GET /users/me - Get current user profile
 router.get(
-  "/me", 
-  cacheMiddleware({ ttl: 300, keyPrefix: 'user-me' }),
+  "/me",
   getCurrentUserProfile
 );
 
@@ -48,50 +44,47 @@ router.patch("/me/notifications", updateNotificationPreferences);
 // ==================== ADMIN ROUTES (require admin role) ====================
 // GET requests with cache
 router.get(
-  "/", 
+  "/",
   authorizeRoles(Role.Admin), // Pass the string "Admin"
-  cacheMiddleware({ ttl: 300, keyPrefix: 'users' }), 
   getAllUsers
 );
 
 router.get(
-  "/stats", 
+  "/stats",
   authorizeRoles(Role.Admin), // Pass the string "Admin"
-  cacheMiddleware({ ttl: 3600, keyPrefix: 'user-stats' }), 
   getUserStats
 );
 
 router.get(
-  "/:id", 
-  cacheMiddleware({ ttl: 3600, keyPrefix: 'user' }), 
+  "/:id",
   getUserById
 );
 
 // Admin update routes (with file upload support)
 router.put(
-  "/:id", 
+  "/:id",
   authorizeRoles(Role.Admin), // Pass the string "Admin"
-  profileUpload.single('profileImage'), 
+  profileUpload.single('profileImage'),
   updateUserProfileById
 );
 router.patch(
-  "/:id", 
+  "/:id",
   authorizeRoles(Role.Admin), // Pass the string "Admin"
-  profileUpload.single('profileImage'), 
+  profileUpload.single('profileImage'),
   updateUserProfileById
 );
 router.patch(
-  "/:id/role", 
+  "/:id/role",
   authorizeRoles(Role.Admin), // Pass the string "Admin"
   updateUserRole
 );
 router.patch(
-  "/:id/status", 
+  "/:id/status",
   authorizeRoles(Role.Admin), // Pass the string "Admin"
   updateUserStatus
 );
 router.delete(
-  "/:id", 
+  "/:id",
   authorizeRoles(Role.Admin), // Pass the string "Admin"
   deleteUser
 );

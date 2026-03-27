@@ -2,8 +2,6 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../middlewares/asyncHandler";
 import { formatError } from "../utils/formatError";
 import { query } from "../db";
-import { RedisService } from "../utils/redis.util";
-import { CacheKeys } from "../utils/cacheKeys.util";
 import { Role } from "../constants/roles";
 
 // Helper function to safely get string from query parameter
@@ -34,7 +32,6 @@ export const createSkillCategory = asyncHandler(
       const { name, description } = req.body;
       const currentUserRole = (req as any).user?.role;
       
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -42,7 +39,6 @@ export const createSkillCategory = asyncHandler(
         });
       }
 
-      // Validation
       if (!name || !name.trim()) {
         return res.status(400).json({
           success: false,
@@ -52,7 +48,6 @@ export const createSkillCategory = asyncHandler(
 
       const trimmedName = name.trim();
 
-      // Check if category already exists
       const existingCategory = await query(
         'SELECT * FROM "SkillCategory" WHERE "Name" = $1',
         [trimmedName],
@@ -65,7 +60,6 @@ export const createSkillCategory = asyncHandler(
         });
       }
 
-      // Insert new category
       const insertResult = await query(
         `INSERT INTO "SkillCategory" ("SkillCategoryID", "Name", "Description")
          VALUES (gen_random_uuid(), $1, $2)
@@ -73,16 +67,9 @@ export const createSkillCategory = asyncHandler(
         [trimmedName, description || null],
       );
 
-      const newCategory = insertResult.rows[0];
-
-      // Clear cache for all skill categories
-      await RedisService.delPattern(CacheKeys.deletePattern('skill-categories:*'));
-      await RedisService.delPattern(CacheKeys.deletePattern('skill-category:*'));
-      await RedisService.del(CacheKeys.allSkillCategories());
-
       return res.status(201).json({
         success: true,
-        data: newCategory,
+        data: insertResult.rows[0],
       });
     } catch (error) {
       console.error("Create skill category error:", error);
@@ -106,7 +93,6 @@ export const bulkCreateSkillCategories = asyncHandler(
       const { categories } = req.body;
       const currentUserRole = (req as any).user?.role;
 
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -114,7 +100,6 @@ export const bulkCreateSkillCategories = asyncHandler(
         });
       }
 
-      // Validation
       if (!categories || !Array.isArray(categories) || categories.length === 0) {
         return res.status(400).json({
           success: false,
@@ -122,7 +107,6 @@ export const bulkCreateSkillCategories = asyncHandler(
         });
       }
 
-      // Validate each category
       const validCategories = [];
       const errors = [];
 
@@ -147,7 +131,6 @@ export const bulkCreateSkillCategories = asyncHandler(
         });
       }
 
-      // Check for duplicates in database
       const names = validCategories.map(c => c.name);
       const placeholders = names.map((_, i) => `$${i + 1}`).join(',');
       
@@ -166,7 +149,6 @@ export const bulkCreateSkillCategories = asyncHandler(
         });
       }
 
-      // Bulk insert using multiple values
       const valuesPlaceholders = newCategories.map((_, i) => 
         `(gen_random_uuid(), $${i * 2 + 1}, $${i * 2 + 2})`
       ).join(',');
@@ -180,17 +162,10 @@ export const bulkCreateSkillCategories = asyncHandler(
         flattenedValues,
       );
 
-      const insertedCategories = insertResult.rows;
-
-      // Clear cache
-      await RedisService.delPattern(CacheKeys.deletePattern('skill-categories:*'));
-      await RedisService.delPattern(CacheKeys.deletePattern('skill-category:*'));
-      await RedisService.del(CacheKeys.allSkillCategories());
-
       return res.status(201).json({
         success: true,
         data: {
-          inserted: insertedCategories,
+          inserted: insertResult.rows,
           skipped: validCategories.length - newCategories.length,
           total: validCategories.length,
         },
@@ -210,7 +185,7 @@ export const bulkCreateSkillCategories = asyncHandler(
   },
 );
 
-// Get All Skill Categories (Public with cache)
+// Get All Skill Categories (with pagination)
 export const getAllSkillCategories = asyncHandler(
   async (req: Request, res: Response) => {
     try {
@@ -219,25 +194,7 @@ export const getAllSkillCategories = asyncHandler(
       const offset = (page - 1) * limit;
       const search = getQueryString(req.query.search);
 
-      // Try to get from cache
-      const cacheKey = CacheKeys.skillCategories(page, limit, search);
-      
-      let cachedData = await RedisService.get(cacheKey);
-
-      if (cachedData) {
-        return res.status(200).json({
-          success: true,
-          data: cachedData,
-          fromCache: true,
-        });
-      }
-
-      console.log("Skill categories not in cache, fetching from database...");
-
-      // Build query with optional search
-      let queryText = `
-        SELECT * FROM "SkillCategory"
-      `;
+      let queryText = `SELECT * FROM "SkillCategory"`;
       const queryParams: any[] = [];
 
       if (search) {
@@ -245,7 +202,6 @@ export const getAllSkillCategories = asyncHandler(
         queryParams.push(`%${search}%`);
       }
 
-      // Get total count
       const countQuery = search
         ? `SELECT COUNT(*) FROM "SkillCategory" WHERE "Name" ILIKE $1 OR "Description" ILIKE $1`
         : `SELECT COUNT(*) FROM "SkillCategory"`;
@@ -256,29 +212,22 @@ export const getAllSkillCategories = asyncHandler(
       );
       const total = parseInt(countResult.rows[0].count);
 
-      // Add pagination
       queryText += ` ORDER BY "Name" LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
       queryParams.push(limit, offset);
 
       const result = await query(queryText, queryParams);
 
-      const response = {
-        categories: result.rows,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit),
-        },
-      };
-
-      // Cache for 1 hour (3600 seconds)
-      await RedisService.setEx(cacheKey, 3600, response);
-
       return res.status(200).json({
         success: true,
-        data: response,
-        fromCache: false,
+        data: {
+          categories: result.rows,
+          pagination: {
+            page,
+            limit,
+            total,
+            pages: Math.ceil(total / limit),
+          },
+        },
       });
     } catch (error) {
       console.error("Get all skill categories error:", error);
@@ -295,11 +244,10 @@ export const getAllSkillCategories = asyncHandler(
   },
 );
 
-// Get Skill Category by ID (Public with cache)
+// Get Skill Category by ID
 export const getSkillCategoryById = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Ensure id is treated as a string
       const idParam = req.params.id;
       const id = Array.isArray(idParam) ? idParam[0] : idParam;
       const includeSkills = getQueryBoolean(req.query.includeSkills);
@@ -311,53 +259,32 @@ export const getSkillCategoryById = asyncHandler(
         });
       }
 
-      // Try to get from cache
-      const cacheKey = includeSkills 
-        ? CacheKeys.skillCategoryWithSkills(id)
-        : CacheKeys.skillCategory(id);
-      
-      let category = await RedisService.get(cacheKey);
+      const result = await query(
+        `SELECT * FROM "SkillCategory" WHERE "SkillCategoryID" = $1`,
+        [id],
+      );
 
-      if (!category) {
-        console.log("Skill category not in cache, fetching from database...");
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          errors: [formatError("category", "Skill category not found")],
+        });
+      }
 
-        const result = await query(
-          `SELECT * FROM "SkillCategory" WHERE "SkillCategoryID" = $1`,
+      const baseCategory = result.rows[0];
+      let category: any = baseCategory;
+
+      if (includeSkills) {
+        const skillsResult = await query(
+          `SELECT * FROM "Skill" WHERE "SkillCategoryID" = $1 ORDER BY "Name"`,
           [id],
         );
-
-        if (result.rows.length === 0) {
-          return res.status(404).json({
-            success: false,
-            errors: [formatError("category", "Skill category not found")],
-          });
-        }
-
-        const baseCategory = result.rows[0];
-
-        // Get skills in this category if requested
-        if (includeSkills) {
-          const skillsResult = await query(
-            `SELECT * FROM "Skill" WHERE "SkillCategoryID" = $1 ORDER BY "Name"`,
-            [id],
-          );
-          
-          category = {
-            ...baseCategory,
-            skills: skillsResult.rows,
-          };
-        } else {
-          category = baseCategory;
-        }
-
-        // Cache for 1 hour (3600 seconds)
-        await RedisService.setEx(cacheKey, 3600, category);
+        category = { ...baseCategory, skills: skillsResult.rows };
       }
 
       return res.status(200).json({
         success: true,
         data: category,
-        fromCache: true,
       });
     } catch (error) {
       console.error("Get skill category by ID error:", error);
@@ -378,7 +305,6 @@ export const getSkillCategoryById = asyncHandler(
 export const updateSkillCategory = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Ensure id is treated as a string
       const idParam = req.params.id;
       const id = Array.isArray(idParam) ? idParam[0] : idParam;
       const { name, description } = req.body;
@@ -391,7 +317,6 @@ export const updateSkillCategory = asyncHandler(
         });
       }
 
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -399,7 +324,6 @@ export const updateSkillCategory = asyncHandler(
         });
       }
 
-      // Check if category exists
       const existingCategory = await query(
         `SELECT * FROM "SkillCategory" WHERE "SkillCategoryID" = $1`,
         [id],
@@ -412,7 +336,6 @@ export const updateSkillCategory = asyncHandler(
         });
       }
 
-      // If name is being updated, check for duplicates
       if (name && name.trim() !== existingCategory.rows[0].Name) {
         const duplicateCheck = await query(
           `SELECT * FROM "SkillCategory" WHERE "Name" = $1 AND "SkillCategoryID" != $2`,
@@ -427,7 +350,6 @@ export const updateSkillCategory = asyncHandler(
         }
       }
 
-      // Update category
       const updateResult = await query(
         `UPDATE "SkillCategory" 
          SET "Name" = COALESCE($1, "Name"), 
@@ -437,17 +359,9 @@ export const updateSkillCategory = asyncHandler(
         [name?.trim() || null, description || null, id],
       );
 
-      const updatedCategory = updateResult.rows[0];
-
-      // Clear cache
-      await RedisService.delPattern(CacheKeys.deletePattern('skill-categories:*'));
-      await RedisService.del(CacheKeys.skillCategory(id));
-      await RedisService.del(CacheKeys.skillCategoryWithSkills(id));
-      await RedisService.del(CacheKeys.allSkillCategories());
-
       return res.status(200).json({
         success: true,
-        data: updatedCategory,
+        data: updateResult.rows[0],
       });
     } catch (error) {
       console.error("Update skill category error:", error);
@@ -468,7 +382,6 @@ export const updateSkillCategory = asyncHandler(
 export const deleteSkillCategory = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Ensure id is treated as a string
       const idParam = req.params.id;
       const id = Array.isArray(idParam) ? idParam[0] : idParam;
       const currentUserRole = (req as any).user?.role;
@@ -480,7 +393,6 @@ export const deleteSkillCategory = asyncHandler(
         });
       }
 
-      // Check if user is admin
       if (currentUserRole !== Role.Admin) {
         return res.status(403).json({
           success: false,
@@ -488,7 +400,6 @@ export const deleteSkillCategory = asyncHandler(
         });
       }
 
-      // Check if category exists
       const categoryCheck = await query(
         `SELECT * FROM "SkillCategory" WHERE "SkillCategoryID" = $1`,
         [id],
@@ -501,7 +412,6 @@ export const deleteSkillCategory = asyncHandler(
         });
       }
 
-      // Check if category has associated skills
       const skillsCheck = await query(
         `SELECT COUNT(*) FROM "Skill" WHERE "SkillCategoryID" = $1`,
         [id],
@@ -521,17 +431,10 @@ export const deleteSkillCategory = asyncHandler(
         });
       }
 
-      // Delete category
       await query(
         `DELETE FROM "SkillCategory" WHERE "SkillCategoryID" = $1`,
         [id],
       );
-
-      // Clear cache
-      await RedisService.delPattern(CacheKeys.deletePattern('skill-categories:*'));
-      await RedisService.del(CacheKeys.skillCategory(id));
-      await RedisService.del(CacheKeys.skillCategoryWithSkills(id));
-      await RedisService.del(CacheKeys.allSkillCategories());
 
       return res.status(200).json({
         success: true,
@@ -551,32 +454,18 @@ export const deleteSkillCategory = asyncHandler(
     }
   },
 );
-// Get all skill categories (simple list, no pagination - for dropdowns)
+
+// Get all skill categories (simple list for dropdowns)
 export const getAllSkillCategoriesSimple = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Try to get from cache
-      const cacheKey = CacheKeys.allSkillCategories();
-      
-      let categories = await RedisService.get(cacheKey);
-
-      if (!categories) {
-        console.log("Simple skill categories list not in cache, fetching from database...");
-
-        const result = await query(
-          `SELECT "SkillCategoryID", "Name" FROM "SkillCategory" ORDER BY "Name"`,
-        );
-
-        categories = result.rows;
-
-        // Cache for 1 hour
-        await RedisService.setEx(cacheKey, 3600, categories);
-      }
+      const result = await query(
+        `SELECT "SkillCategoryID", "Name" FROM "SkillCategory" ORDER BY "Name"`,
+      );
 
       return res.status(200).json({
         success: true,
-        data: categories,
-        fromCache: true,
+        data: result.rows,
       });
     } catch (error) {
       console.error("Get simple skill categories error:", error);
@@ -593,42 +482,25 @@ export const getAllSkillCategoriesSimple = asyncHandler(
   },
 );
 
-
 // Get featured skill categories
 export const getFeaturedSkillCategories = asyncHandler(
   async (req: Request, res: Response) => {
     try {
       const limit = getQueryNumber(req.query.limit, 10);
 
-      // Try to get from cache
-      const cacheKey = CacheKeys.featuredSkillCategories(limit);
-      
-      let categories = await RedisService.get(cacheKey);
-
-      if (!categories) {
-        console.log("Featured categories not in cache, fetching from database...");
-
-        // Get categories with most skills
-        const result = await query(
-          `SELECT sc.*, COUNT(s."SkillID") as skill_count
-           FROM "SkillCategory" sc
-           LEFT JOIN "Skill" s ON sc."SkillCategoryID" = s."SkillCategoryID"
-           GROUP BY sc."SkillCategoryID"
-           ORDER BY skill_count DESC
-           LIMIT $1`,
-          [limit],
-        );
-
-        categories = result.rows;
-
-        // Cache for 1 hour
-        await RedisService.setEx(cacheKey, 3600, categories);
-      }
+      const result = await query(
+        `SELECT sc.*, COUNT(s."SkillID") as skill_count
+         FROM "SkillCategory" sc
+         LEFT JOIN "Skill" s ON sc."SkillCategoryID" = s."SkillCategoryID"
+         GROUP BY sc."SkillCategoryID"
+         ORDER BY skill_count DESC
+         LIMIT $1`,
+        [limit],
+      );
 
       return res.status(200).json({
         success: true,
-        data: categories,
-        fromCache: true,
+        data: result.rows,
       });
     } catch (error) {
       console.error("Get featured categories error:", error);
@@ -649,7 +521,6 @@ export const getFeaturedSkillCategories = asyncHandler(
 export const getSkillCategoryStats = asyncHandler(
   async (req: Request, res: Response) => {
     try {
-      // Ensure id is treated as a string
       const idParam = req.params.id;
       const id = Array.isArray(idParam) ? idParam[0] : idParam;
 
@@ -660,59 +531,44 @@ export const getSkillCategoryStats = asyncHandler(
         });
       }
 
-      // Try to get from cache
-      const cacheKey = CacheKeys.skillCategoryStats(id);
-      
-      let stats = await RedisService.get(cacheKey);
+      const categoryCheck = await query(
+        `SELECT * FROM "SkillCategory" WHERE "SkillCategoryID" = $1`,
+        [id],
+      );
 
-      if (!stats) {
-        console.log("Category stats not in cache, fetching from database...");
-
-        // Check if category exists
-        const categoryCheck = await query(
-          `SELECT * FROM "SkillCategory" WHERE "SkillCategoryID" = $1`,
-          [id],
-        );
-
-        if (categoryCheck.rows.length === 0) {
-          return res.status(404).json({
-            success: false,
-            errors: [formatError("category", "Skill category not found")],
-          });
-        }
-
-        // Get statistics
-        const statsResult = await query(
-          `SELECT 
-             COUNT(DISTINCT s."SkillID") as total_skills,
-             COUNT(DISTINCT us."UserSkillID") as total_user_skills,
-             COUNT(DISTINCT CASE WHEN us."IsMentor" = true THEN us."UserID" END) as total_mentors,
-             COUNT(DISTINCT CASE WHEN us."IsLearner" = true THEN us."UserID" END) as total_learners,
-             AVG(us."ExperienceLevel") as avg_experience_level
-           FROM "SkillCategory" sc
-           LEFT JOIN "Skill" s ON sc."SkillCategoryID" = s."SkillCategoryID"
-           LEFT JOIN "UserSkill" us ON s."SkillID" = us."SkillID"
-           WHERE sc."SkillCategoryID" = $1
-           GROUP BY sc."SkillCategoryID"`,
-          [id],
-        );
-
-        stats = statsResult.rows[0] || {
-          total_skills: 0,
-          total_user_skills: 0,
-          total_mentors: 0,
-          total_learners: 0,
-          avg_experience_level: null,
-        };
-
-        // Cache for 1 hour
-        await RedisService.setEx(cacheKey, 3600, stats);
+      if (categoryCheck.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          errors: [formatError("category", "Skill category not found")],
+        });
       }
+
+      const statsResult = await query(
+        `SELECT 
+           COUNT(DISTINCT s."SkillID") as total_skills,
+           COUNT(DISTINCT us."UserSkillID") as total_user_skills,
+           COUNT(DISTINCT CASE WHEN us."IsMentor" = true THEN us."UserID" END) as total_mentors,
+           COUNT(DISTINCT CASE WHEN us."IsLearner" = true THEN us."UserID" END) as total_learners,
+           AVG(us."ExperienceLevel") as avg_experience_level
+         FROM "SkillCategory" sc
+         LEFT JOIN "Skill" s ON sc."SkillCategoryID" = s."SkillCategoryID"
+         LEFT JOIN "UserSkill" us ON s."SkillID" = us."SkillID"
+         WHERE sc."SkillCategoryID" = $1
+         GROUP BY sc."SkillCategoryID"`,
+        [id],
+      );
+
+      const stats = statsResult.rows[0] || {
+        total_skills: 0,
+        total_user_skills: 0,
+        total_mentors: 0,
+        total_learners: 0,
+        avg_experience_level: null,
+      };
 
       return res.status(200).json({
         success: true,
         data: stats,
-        fromCache: true,
       });
     } catch (error) {
       console.error("Get category stats error:", error);

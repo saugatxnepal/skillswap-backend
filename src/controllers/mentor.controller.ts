@@ -2,8 +2,6 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../middlewares/asyncHandler";
 import { formatError } from "../utils/formatError";
 import { query } from "../db";
-import { RedisService } from "../utils/redis.util";
-import { CacheKeys } from "../utils/cacheKeys.util";
 
 enum Role {
   Admin = "Admin",
@@ -72,7 +70,6 @@ export const addMentorSkill = asyncHandler(async (req: Request, res: Response) =
       });
     }
 
-    // Check if user is mentor
     const userResult = await query(
       `SELECT "Role" FROM "User" WHERE "UserID" = $1`,
       [userId]
@@ -85,7 +82,6 @@ export const addMentorSkill = asyncHandler(async (req: Request, res: Response) =
       });
     }
 
-    // Check if category exists
     const categoryCheck = await query(
       `SELECT * FROM "SkillCategory" WHERE "SkillCategoryID" = $1`,
       [skillCategoryId]
@@ -98,7 +94,6 @@ export const addMentorSkill = asyncHandler(async (req: Request, res: Response) =
       });
     }
 
-    // Check if mentor already has a skill with this name
     const existingSkill = await query(
       `SELECT s.* FROM "Skill" s
        JOIN "UserSkill" us ON s."SkillID" = us."SkillID"
@@ -113,7 +108,6 @@ export const addMentorSkill = asyncHandler(async (req: Request, res: Response) =
       });
     }
 
-    // Create the skill
     const skillResult = await query(
       `INSERT INTO "Skill" 
        ("SkillID", "Name", "Description", "DetailedContent", "SkillCategoryID", "IsAvailable")
@@ -124,7 +118,6 @@ export const addMentorSkill = asyncHandler(async (req: Request, res: Response) =
 
     const newSkill = skillResult.rows[0];
 
-    // Link skill to mentor - FIXED: Added UpdatedAt with NOW()
     const userSkillResult = await query(
       `INSERT INTO "UserSkill" 
        ("UserSkillID", "UserID", "SkillID", "IsMentor", "IsLearner", 
@@ -133,10 +126,6 @@ export const addMentorSkill = asyncHandler(async (req: Request, res: Response) =
        RETURNING *`,
       [userId, newSkill.SkillID, experienceLevel || null, teachingStyle || null]
     );
-
-    // Clear cache
-    await RedisService.del(CacheKeys.userSkills(userId));
-    await RedisService.delPattern(`mentor:${userId}:skills:*`);
 
     return res.status(201).json({
       success: true,
@@ -161,39 +150,27 @@ export const getMyMentorSkills = asyncHandler(async (req: Request, res: Response
     const userId = (req as any).user?.UserID;
     const { includeUnavailable = false } = req.query;
 
-    const cacheKey = includeUnavailable 
-      ? `mentor:${userId}:skills:all`
-      : `mentor:${userId}:skills:available`;
+    let queryText = `
+      SELECT s.*, us."ExperienceLevel", us."TeachingStyle", 
+             us."CreatedAt" as "AddedAt", sc."Name" as "CategoryName",
+             sc."SkillCategoryID" as "CategoryId"
+      FROM "Skill" s
+      JOIN "UserSkill" us ON s."SkillID" = us."SkillID"
+      LEFT JOIN "SkillCategory" sc ON s."SkillCategoryID" = sc."SkillCategoryID"
+      WHERE us."UserID" = $1 AND us."IsMentor" = true
+    `;
     
-    let skills = await RedisService.get(cacheKey);
-
-    if (!skills) {
-      let queryText = `
-        SELECT s.*, us."ExperienceLevel", us."TeachingStyle", 
-               us."CreatedAt" as "AddedAt", sc."Name" as "CategoryName",
-               sc."SkillCategoryID" as "CategoryId"
-        FROM "Skill" s
-        JOIN "UserSkill" us ON s."SkillID" = us."SkillID"
-        LEFT JOIN "SkillCategory" sc ON s."SkillCategoryID" = sc."SkillCategoryID"
-        WHERE us."UserID" = $1 AND us."IsMentor" = true
-      `;
-      
-      if (!includeUnavailable) {
-        queryText += ` AND s."IsAvailable" = true`;
-      }
-
-      queryText += ` ORDER BY sc."DisplayOrder", s."Name"`;
-
-      const result = await query(queryText, [userId]);
-      skills = result.rows;
-      
-      await RedisService.setEx(cacheKey, 300, skills);
+    if (!includeUnavailable) {
+      queryText += ` AND s."IsAvailable" = true`;
     }
+
+    queryText += ` ORDER BY sc."DisplayOrder", s."Name"`;
+
+    const result = await query(queryText, [userId]);
 
     return res.status(200).json({
       success: true,
-      data: skills,
-      fromCache: true,
+      data: result.rows,
     });
   } catch (error) {
     console.error("Get my mentor skills error:", error);
@@ -218,7 +195,6 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
       });
     }
 
-    // Check if user owns this skill
     const userSkill = await query(
       `SELECT * FROM "UserSkill" WHERE "UserID" = $1 AND "SkillID" = $2 AND "IsMentor" = true`,
       [userId, skillId]
@@ -231,7 +207,6 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
       });
     }
 
-    // Update skill details
     if (name || description || detailedContent || isAvailable !== undefined) {
       const updates: string[] = [];
       const values: any[] = [];
@@ -264,7 +239,6 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
       );
     }
 
-    // Update user skill details
     if (experienceLevel !== undefined || teachingStyle !== undefined) {
       const updates: string[] = [];
       const values: any[] = [];
@@ -289,10 +263,6 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
       );
     }
 
-    // Clear cache
-    await RedisService.delPattern(`mentor:${userId}:skills:*`);
-    await RedisService.del(CacheKeys.userSkills(userId));
-
     return res.status(200).json({
       success: true,
       message: "Skill updated successfully",
@@ -305,6 +275,7 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
     });
   }
 });
+
 // Toggle skill availability
 export const toggleSkillAvailability = asyncHandler(async (req: Request, res: Response) => {
   try {
@@ -319,7 +290,6 @@ export const toggleSkillAvailability = asyncHandler(async (req: Request, res: Re
       });
     }
 
-    // Check if user owns this skill
     const userSkill = await query(
       `SELECT * FROM "UserSkill" WHERE "UserID" = $1 AND "SkillID" = $2 AND "IsMentor" = true`,
       [userId, skillId]
@@ -332,7 +302,6 @@ export const toggleSkillAvailability = asyncHandler(async (req: Request, res: Re
       });
     }
 
-    // Update skill availability
     const result = await query(
       `UPDATE "Skill" 
        SET "IsAvailable" = $1, "UpdatedAt" = NOW()
@@ -340,10 +309,6 @@ export const toggleSkillAvailability = asyncHandler(async (req: Request, res: Re
        RETURNING *`,
       [isAvailable, skillId]
     );
-
-    // Clear cache
-    await RedisService.delPattern(`mentor:${userId}:skills:*`);
-    await RedisService.del(CacheKeys.userSkills(userId));
 
     return res.status(200).json({
       success: true,
@@ -365,7 +330,6 @@ export const deleteMentorSkill = asyncHandler(async (req: Request, res: Response
     const userId = (req as any).user?.UserID;
     const { skillId } = req.params;
 
-    // Check if there are active sessions for this skill
     const activeSessions = await query(
       `SELECT COUNT(*) FROM "Session" s
        JOIN "SessionSkill" ss ON s."SessionID" = ss."SessionID"
@@ -382,22 +346,16 @@ export const deleteMentorSkill = asyncHandler(async (req: Request, res: Response
       });
     }
 
-    // Delete user skill relation
     await query(
       `DELETE FROM "UserSkill" 
        WHERE "UserID" = $1 AND "SkillID" = $2 AND "IsMentor" = true`,
       [userId, skillId]
     );
 
-    // Delete the skill itself
     await query(
       `DELETE FROM "Skill" WHERE "SkillID" = $1`,
       [skillId]
     );
-
-    // Clear cache
-    await RedisService.delPattern(`mentor:${userId}:skills:*`);
-    await RedisService.del(CacheKeys.userSkills(userId));
 
     return res.status(200).json({
       success: true,
@@ -412,13 +370,13 @@ export const deleteMentorSkill = asyncHandler(async (req: Request, res: Response
   }
 });
 
-// ==================== AVAILABILITY MANAGEMENT (TIMING) ====================
+// ==================== AVAILABILITY MANAGEMENT ====================
 
 // Set weekly availability
 export const setWeeklyAvailability = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
-    const { availability } = req.body; // Array of { dayOfWeek, startTime, endTime }
+    const { availability } = req.body;
 
     if (!availability || !Array.isArray(availability)) {
       return res.status(400).json({
@@ -427,13 +385,11 @@ export const setWeeklyAvailability = asyncHandler(async (req: Request, res: Resp
       });
     }
 
-    // Delete existing recurring availability for this user
     await query(
       `DELETE FROM "Availability" WHERE "UserID" = $1 AND "IsRecurring" = true`,
       [userId]
     );
 
-    // Insert new availability
     const inserted = [];
     for (const slot of availability) {
       const { dayOfWeek, startTime, endTime } = slot;
@@ -452,10 +408,6 @@ export const setWeeklyAvailability = asyncHandler(async (req: Request, res: Resp
       inserted.push(result.rows[0]);
     }
 
-    // Clear cache
-    await RedisService.del(CacheKeys.userAvailability(userId));
-    await RedisService.delPattern(`availability:${userId}:*`);
-
     return res.status(200).json({
       success: true,
       data: inserted,
@@ -470,7 +422,7 @@ export const setWeeklyAvailability = asyncHandler(async (req: Request, res: Resp
   }
 });
 
-// Get mentor's availability (for showing to learners)
+// Get mentor's availability (for learners)
 export const getMentorAvailability = asyncHandler(async (req: Request, res: Response) => {
   try {
     const { mentorId } = req.params;
@@ -482,39 +434,27 @@ export const getMentorAvailability = asyncHandler(async (req: Request, res: Resp
       });
     }
 
-    const cacheKey = `availability:mentor:${mentorId}`;
-    let availability = await RedisService.get(cacheKey);
+    const weeklyResult = await query(
+      `SELECT * FROM "Availability" 
+       WHERE "UserID" = $1 AND "IsRecurring" = true AND "IsActive" = true
+       ORDER BY "DayOfWeek", "StartTime"`,
+      [mentorId]
+    );
 
-    if (!availability) {
-      // Get weekly recurring availability
-      const weeklyResult = await query(
-        `SELECT * FROM "Availability" 
-         WHERE "UserID" = $1 AND "IsRecurring" = true AND "IsActive" = true
-         ORDER BY "DayOfWeek", "StartTime"`,
-        [mentorId]
-      );
-
-      // Get specific one-time availability
-      const specificResult = await query(
-        `SELECT * FROM "Availability" 
-         WHERE "UserID" = $1 AND "IsRecurring" = false AND "IsActive" = true
-           AND "SpecificDate" >= NOW()
-         ORDER BY "SpecificDate", "StartTime"`,
-        [mentorId]
-      );
-
-      availability = {
-        weekly: weeklyResult.rows,
-        specific: specificResult.rows,
-      };
-
-      await RedisService.setEx(cacheKey, 300, availability);
-    }
+    const specificResult = await query(
+      `SELECT * FROM "Availability" 
+       WHERE "UserID" = $1 AND "IsRecurring" = false AND "IsActive" = true
+         AND "SpecificDate" >= NOW()
+       ORDER BY "SpecificDate", "StartTime"`,
+      [mentorId]
+    );
 
     return res.status(200).json({
       success: true,
-      data: availability,
-      fromCache: true,
+      data: {
+        weekly: weeklyResult.rows,
+        specific: specificResult.rows,
+      },
     });
   } catch (error) {
     console.error("Get mentor availability error:", error);
@@ -529,40 +469,28 @@ export const getMentorAvailability = asyncHandler(async (req: Request, res: Resp
 export const getMyAvailability = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
-    
-    const cacheKey = `availability:mentor:${userId}`;
-    let availability = await RedisService.get(cacheKey);
 
-    if (!availability) {
-      // Get weekly recurring availability
-      const weeklyResult = await query(
-        `SELECT * FROM "Availability" 
-         WHERE "UserID" = $1 AND "IsRecurring" = true AND "IsActive" = true
-         ORDER BY "DayOfWeek", "StartTime"`,
-        [userId]
-      );
+    const weeklyResult = await query(
+      `SELECT * FROM "Availability" 
+       WHERE "UserID" = $1 AND "IsRecurring" = true AND "IsActive" = true
+       ORDER BY "DayOfWeek", "StartTime"`,
+      [userId]
+    );
 
-      // Get specific one-time availability
-      const specificResult = await query(
-        `SELECT * FROM "Availability" 
-         WHERE "UserID" = $1 AND "IsRecurring" = false AND "IsActive" = true
-           AND "SpecificDate" >= NOW()
-         ORDER BY "SpecificDate", "StartTime"`,
-        [userId]
-      );
-
-      availability = {
-        weekly: weeklyResult.rows,
-        specific: specificResult.rows,
-      };
-
-      await RedisService.setEx(cacheKey, 300, availability);
-    }
+    const specificResult = await query(
+      `SELECT * FROM "Availability" 
+       WHERE "UserID" = $1 AND "IsRecurring" = false AND "IsActive" = true
+         AND "SpecificDate" >= NOW()
+       ORDER BY "SpecificDate", "StartTime"`,
+      [userId]
+    );
 
     return res.status(200).json({
       success: true,
-      data: availability,
-      fromCache: true,
+      data: {
+        weekly: weeklyResult.rows,
+        specific: specificResult.rows,
+      },
     });
   } catch (error) {
     console.error("Get my availability error:", error);
@@ -573,7 +501,7 @@ export const getMyAvailability = asyncHandler(async (req: Request, res: Response
   }
 });
 
-// Add specific date availability (one-time)
+// Add specific date availability
 export const addSpecificAvailability = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -593,10 +521,6 @@ export const addSpecificAvailability = asyncHandler(async (req: Request, res: Re
        RETURNING *`,
       [userId, specificDate, startTime, endTime]
     );
-
-    // Clear cache
-    await RedisService.del(CacheKeys.userAvailability(userId));
-    await RedisService.delPattern(`availability:mentor:${userId}`);
 
     return res.status(201).json({
       success: true,
@@ -629,10 +553,6 @@ export const removeAvailability = asyncHandler(async (req: Request, res: Respons
       `DELETE FROM "Availability" WHERE "AvailabilityID" = $1 AND "UserID" = $2`,
       [availabilityId, userId]
     );
-
-    // Clear cache
-    await RedisService.del(CacheKeys.userAvailability(userId));
-    await RedisService.delPattern(`availability:mentor:${userId}`);
 
     return res.status(200).json({
       success: true,
@@ -680,7 +600,6 @@ export const getMentorSessions = asyncHandler(async (req: Request, res: Response
 
     const result = await query(queryText, params);
 
-    // Get total count
     const countResult = await query(
       `SELECT COUNT(*) FROM "Session" WHERE "MentorID" = $1${status ? ' AND "Status" = $2' : ''}`,
       status ? [userId, status] : [userId]
@@ -736,7 +655,6 @@ export const getSessionDetails = asyncHandler(async (req: Request, res: Response
       });
     }
 
-    // Get session skills
     const skills = await query(
       `SELECT s.* FROM "Skill" s
        JOIN "SessionSkill" ss ON s."SkillID" = ss."SkillID"
@@ -744,7 +662,6 @@ export const getSessionDetails = asyncHandler(async (req: Request, res: Response
       [sessionId]
     );
 
-    // Get session participants
     const participants = await query(
       `SELECT p.*, u."FullName", u."Email", u."ProfileImageURL"
        FROM "SessionParticipant" p
@@ -777,7 +694,6 @@ export const updateSessionStatus = asyncHandler(async (req: Request, res: Respon
     const { sessionId } = req.params;
     const { status, meetingLink } = req.body;
 
-    // Check if user is mentor of this session
     const sessionCheck = await query(
       `SELECT * FROM "Session" WHERE "SessionID" = $1 AND "MentorID" = $2`,
       [sessionId, userId]
@@ -827,9 +743,6 @@ export const updateSessionStatus = asyncHandler(async (req: Request, res: Respon
        RETURNING *`,
       values
     );
-
-    // Clear cache
-    await RedisService.delPattern(`session:${sessionId}:*`);
 
     return res.status(200).json({
       success: true,

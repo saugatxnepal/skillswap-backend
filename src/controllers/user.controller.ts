@@ -2,8 +2,6 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../middlewares/asyncHandler";
 import { formatError } from "../utils/formatError";
 import { query } from "../db";
-import { RedisService } from "../utils/redis.util";
-import { CacheKeys } from "../utils/cacheKeys.util";
 import { comparePassword, hashPassword } from "../utils/hash.util";
 import fs from "fs";
 import path from "path";
@@ -22,11 +20,6 @@ const getQueryNumber = (param: any, defaultValue: number): number => {
   if (!str) return defaultValue;
   const num = parseInt(str, 10);
   return isNaN(num) ? defaultValue : num;
-};
-
-// Get base URL for serving images
-const getBaseUrl = (req: Request): string => {
-  return `${req.protocol}://${req.get('host')}`;
 };
 
 // Delete old profile image file
@@ -64,37 +57,24 @@ export const getCurrentUserProfile = asyncHandler(
         });
       }
 
-      const cacheKey = CacheKeys.userProfile(currentUserId);
-      let user = await RedisService.get(cacheKey);
+      const result = await query(
+        `SELECT "UserID", "FullName", "Email", "Role", "Status", "Bio", 
+                "ProfileImageURL", "Timezone", "NotificationPreferences", "CreatedAt"
+         FROM "User" 
+         WHERE "UserID" = $1`,
+        [currentUserId],
+      );
 
-      if (!user) {
-        console.log("Current user profile not in cache, fetching from database...");
-
-        const result = await query(
-          `SELECT "UserID", "FullName", "Email", "Role", "Status", "Bio", 
-                  "ProfileImageURL", "Timezone", "NotificationPreferences", "CreatedAt"
-           FROM "User" 
-           WHERE "UserID" = $1`,
-          [currentUserId],
-        );
-
-        if (result.rows.length === 0) {
-          return res.status(404).json({
-            success: false,
-            errors: [formatError("user", "User not found")],
-          });
-        }
-
-        user = result.rows[0];
-
-        // Cache for 1 hour (3600 seconds)
-        await RedisService.setEx(cacheKey, 3600, user);
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          errors: [formatError("user", "User not found")],
+        });
       }
 
       return res.status(200).json({
         success: true,
-        data: user,
-        fromCache: true,
+        data: result.rows[0],
       });
     } catch (error) {
       console.error("Get current user profile error:", error);
@@ -200,11 +180,6 @@ export const updateCurrentUserProfile = asyncHandler(
       const updateResult = await query(updateQuery, values);
       const updatedUser = updateResult.rows[0];
 
-      await RedisService.del(CacheKeys.user(currentUserId));
-      await RedisService.del(CacheKeys.userProfile(currentUserId));
-      await RedisService.del(CacheKeys.userByEmail(updatedUser.Email));
-      await RedisService.delPattern(CacheKeys.deletePattern('users:page:*'));
-
       return res.status(200).json({
         success: true,
         data: updatedUser,
@@ -282,10 +257,6 @@ export const updateUserPassword = asyncHandler(
         [newPasswordHash, currentUserId],
       );
 
-      await RedisService.del(CacheKeys.user(currentUserId));
-      await RedisService.del(CacheKeys.userProfile(currentUserId));
-      await RedisService.delPattern(`session:${currentUserId}:*`);
-
       return res.status(200).json({
         success: true,
         message: "Password updated successfully. Please login again.",
@@ -332,8 +303,6 @@ export const updateNotificationPreferences = asyncHandler(
         [preferences, currentUserId],
       );
 
-      await RedisService.del(CacheKeys.userProfile(currentUserId));
-
       return res.status(200).json({
         success: true,
         data: result.rows[0].NotificationPreferences,
@@ -375,19 +344,6 @@ export const getAllUsers = asyncHandler(
       const search = getQueryString(req.query.search);
       const role = getQueryString(req.query.role);
       const status = getQueryString(req.query.status);
-
-      const cacheKey = CacheKeys.users(page, limit);
-      let cachedData = await RedisService.get(cacheKey);
-
-      if (cachedData) {
-        return res.status(200).json({
-          success: true,
-          data: cachedData,
-          fromCache: true,
-        });
-      }
-
-      console.log("Users not in cache, fetching from database...");
 
       let queryText = `
         SELECT "UserID", "FullName", "Email", "Role", "Status", "Bio", 
@@ -442,22 +398,17 @@ export const getAllUsers = asyncHandler(
 
       const result = await query(queryText, queryParams);
 
-      const response = {
-        users: result.rows,
-        pagination: {
-          page,
-          limit,
-          total,
-          pages: Math.ceil(total / limit),
-        },
-      };
-
-      await RedisService.setEx(cacheKey, 300, response);
-
       return res.status(200).json({
         success: true,
-        data: response,
-        fromCache: false,
+        data: {
+          users: result.rows,
+          pagination: {
+            page,
+            limit,
+            total,
+            pages: Math.ceil(total / limit),
+          },
+        },
       });
     } catch (error) {
       console.error("Get all users error:", error);
@@ -497,36 +448,24 @@ export const getUserById = asyncHandler(
         });
       }
 
-      const cacheKey = CacheKeys.user(targetUserId);
-      let user = await RedisService.get(cacheKey);
+      const result = await query(
+        `SELECT "UserID", "FullName", "Email", "Role", "Status", "Bio", 
+                "ProfileImageURL", "Timezone", "NotificationPreferences", "CreatedAt"
+         FROM "User" 
+         WHERE "UserID" = $1`,
+        [targetUserId],
+      );
 
-      if (!user) {
-        console.log("User not in cache, fetching from database...");
-
-        const result = await query(
-          `SELECT "UserID", "FullName", "Email", "Role", "Status", "Bio", 
-                  "ProfileImageURL", "Timezone", "NotificationPreferences", "CreatedAt"
-           FROM "User" 
-           WHERE "UserID" = $1`,
-          [targetUserId],
-        );
-
-        if (result.rows.length === 0) {
-          return res.status(404).json({
-            success: false,
-            errors: [formatError("user", "User not found")],
-          });
-        }
-
-        user = result.rows[0];
-
-        await RedisService.setEx(cacheKey, 3600, user);
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          errors: [formatError("user", "User not found")],
+        });
       }
 
       return res.status(200).json({
         success: true,
-        data: user,
-        fromCache: true,
+        data: result.rows[0],
       });
     } catch (error) {
       console.error("Get user by ID error:", error);
@@ -647,11 +586,6 @@ export const updateUserProfileById = asyncHandler(
       const updateResult = await query(updateQuery, values);
       const updatedUser = updateResult.rows[0];
 
-      await RedisService.del(CacheKeys.user(targetUserId));
-      await RedisService.del(CacheKeys.userProfile(targetUserId));
-      await RedisService.del(CacheKeys.userByEmail(updatedUser.Email));
-      await RedisService.delPattern(CacheKeys.deletePattern('users:page:*'));
-
       return res.status(200).json({
         success: true,
         data: updatedUser,
@@ -729,16 +663,9 @@ export const updateUserRole = asyncHandler(
         [role, targetUserId],
       );
 
-      const updatedUser = updateResult.rows[0];
-
-      await RedisService.del(CacheKeys.user(targetUserId));
-      await RedisService.del(CacheKeys.userProfile(targetUserId));
-      await RedisService.del(CacheKeys.userByEmail(updatedUser.Email));
-      await RedisService.delPattern(CacheKeys.deletePattern('users:page:*'));
-
       return res.status(200).json({
         success: true,
-        data: updatedUser,
+        data: updateResult.rows[0],
         message: "User role updated successfully",
       });
     } catch (error) {
@@ -813,16 +740,9 @@ export const updateUserStatus = asyncHandler(
         [status, targetUserId],
       );
 
-      const updatedUser = updateResult.rows[0];
-
-      await RedisService.del(CacheKeys.user(targetUserId));
-      await RedisService.del(CacheKeys.userProfile(targetUserId));
-      await RedisService.del(CacheKeys.userByEmail(updatedUser.Email));
-      await RedisService.delPattern(CacheKeys.deletePattern('users:page:*'));
-
       return res.status(200).json({
         success: true,
-        data: updatedUser,
+        data: updateResult.rows[0],
         message: `User status updated to ${status}`,
       });
     } catch (error) {
@@ -881,22 +801,13 @@ export const deleteUser = asyncHandler(
         });
       }
 
-      const userEmail = existingUser.rows[0].Email;
       const profileImageUrl = existingUser.rows[0].ProfileImageURL;
-
       await deleteOldProfileImage(profileImageUrl);
 
       await query(
         `DELETE FROM "User" WHERE "UserID" = $1`,
         [targetUserId],
       );
-
-      await RedisService.del(CacheKeys.user(targetUserId));
-      await RedisService.del(CacheKeys.userProfile(targetUserId));
-      await RedisService.del(CacheKeys.userByEmail(userEmail));
-      await RedisService.del(CacheKeys.userSessions(targetUserId));
-      await RedisService.del(CacheKeys.userActivity(targetUserId));
-      await RedisService.delPattern(CacheKeys.deletePattern('users:page:*'));
 
       return res.status(200).json({
         success: true,
@@ -930,45 +841,35 @@ export const getUserStats = asyncHandler(
         });
       }
 
-      const cacheKey = 'user:stats';
-      let stats = await RedisService.get(cacheKey);
+      const statsResult = await query(`
+        SELECT 
+          COUNT(*) as total_users,
+          COUNT(CASE WHEN "Role" = 'Admin' THEN 1 END) as total_admins,
+          COUNT(CASE WHEN "Role" = 'Mentor' THEN 1 END) as total_mentors,
+          COUNT(CASE WHEN "Role" = 'Learner' THEN 1 END) as total_learners,
+          COUNT(CASE WHEN "Status" = 'Active' THEN 1 END) as active_users,
+          COUNT(CASE WHEN "Status" = 'Inactive' THEN 1 END) as inactive_users,
+          COUNT(CASE WHEN "Status" = 'Banned' THEN 1 END) as banned_users,
+          COUNT(CASE WHEN "CreatedAt" > NOW() - INTERVAL '7 days' THEN 1 END) as new_users_week,
+          COUNT(CASE WHEN "CreatedAt" > NOW() - INTERVAL '30 days' THEN 1 END) as new_users_month
+        FROM "User"
+      `);
 
-      if (!stats) {
-        console.log("User stats not in cache, fetching from database...");
-
-        const statsResult = await query(`
-          SELECT 
-            COUNT(*) as total_users,
-            COUNT(CASE WHEN "Role" = 'Admin' THEN 1 END) as total_admins,
-            COUNT(CASE WHEN "Role" = 'Mentor' THEN 1 END) as total_mentors,
-            COUNT(CASE WHEN "Role" = 'Learner' THEN 1 END) as total_learners,
-            COUNT(CASE WHEN "Status" = 'Active' THEN 1 END) as active_users,
-            COUNT(CASE WHEN "Status" = 'Inactive' THEN 1 END) as inactive_users,
-            COUNT(CASE WHEN "Status" = 'Banned' THEN 1 END) as banned_users,
-            COUNT(CASE WHEN "CreatedAt" > NOW() - INTERVAL '7 days' THEN 1 END) as new_users_week,
-            COUNT(CASE WHEN "CreatedAt" > NOW() - INTERVAL '30 days' THEN 1 END) as new_users_month
-          FROM "User"
-        `);
-
-        stats = statsResult.rows[0] || {
-          total_users: 0,
-          total_admins: 0,
-          total_mentors: 0,
-          total_learners: 0,
-          active_users: 0,
-          inactive_users: 0,
-          banned_users: 0,
-          new_users_week: 0,
-          new_users_month: 0,
-        };
-
-        await RedisService.setEx(cacheKey, 3600, stats);
-      }
+      const stats = statsResult.rows[0] || {
+        total_users: 0,
+        total_admins: 0,
+        total_mentors: 0,
+        total_learners: 0,
+        active_users: 0,
+        inactive_users: 0,
+        banned_users: 0,
+        new_users_week: 0,
+        new_users_month: 0,
+      };
 
       return res.status(200).json({
         success: true,
         data: stats,
-        fromCache: true,
       });
     } catch (error) {
       console.error("Get user stats error:", error);

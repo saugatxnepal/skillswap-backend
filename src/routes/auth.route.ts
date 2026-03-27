@@ -4,6 +4,7 @@ import {
   registerUser,
   loginUser,
   logoutUser,
+  logoutAllDevices,
   getProfile,
   getUserSessions,
   verifyEmail,
@@ -11,48 +12,41 @@ import {
   getUserActivity
 } from "../controllers/auth.controller";
 import { authenticateJWT } from "../middlewares/auth.middleware";
-import { cacheMiddleware } from "../middlewares/cache.middleware";
 
 const router = Router();
 
-// POST requests - NO CACHE
+// Public routes
 router.post("/register", registerUser);
 router.post("/login", loginUser);
 
-// GET requests with cache
 router.get(
-  "/verify-email/:token", 
-  cacheMiddleware({ ttl: 300, keyPrefix: 'verify' }), 
+  "/verify-email/:token",
   verifyEmail
 );
 
 router.get(
-  "/check-email/:email", 
-  cacheMiddleware({ ttl: 600, keyPrefix: 'email-check' }), 
+  "/check-email/:email",
   checkEmailAvailability
 );
 
+// Protected routes
 router.use(authenticateJWT);
 
-// POST requests - NO CACHE
 router.post("/logout", logoutUser);
+router.post("/logout-all", logoutAllDevices);
 
-// GET requests with cache (all protected)
 router.get(
-  "/profile", 
-  cacheMiddleware({ ttl: 300, keyPrefix: 'profile' }), 
+  "/profile",
   getProfile
 );
 
 router.get(
-  "/sessions", 
-  cacheMiddleware({ ttl: 120, keyPrefix: 'sessions' }), 
+  "/sessions",
   getUserSessions
 );
 
 router.get(
-  "/activity", 
-  cacheMiddleware({ ttl: 300, keyPrefix: 'activity' }), 
+  "/activity",
   getUserActivity
 );
 

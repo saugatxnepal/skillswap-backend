@@ -8,20 +8,17 @@ import {
   deleteSkillCategory,
 } from "../controllers/skillCategory.controller";
 import { authenticateJWT } from "../middlewares/auth.middleware";
-import { cacheMiddleware } from "../middlewares/cache.middleware";
 
 const router = Router();
 
 // GET requests with cache
 router.get(
-  "/", 
-  cacheMiddleware({ ttl: 3600, keyPrefix: 'skill-categories' }), 
+  "/",
   getAllSkillCategories
 );
 
 router.get(
-  "/:id", 
-  cacheMiddleware({ ttl: 3600, keyPrefix: 'skill-category' }), 
+  "/:id",
   getSkillCategoryById
 );
 

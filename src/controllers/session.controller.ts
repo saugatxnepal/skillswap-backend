@@ -2,7 +2,6 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../middlewares/asyncHandler";
 import { formatError } from "../utils/formatError";
 import { query } from "../db";
-import { RedisService } from "../utils/redis.util";
 import { v4 as uuidv4 } from "uuid";
 
 enum SessionStatus {

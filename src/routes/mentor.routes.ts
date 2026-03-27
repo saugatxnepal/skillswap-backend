@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { authenticateJWT, authorizeRoles } from "../middlewares/auth.middleware";
-import { cacheMiddleware } from "../middlewares/cache.middleware";
 import {
   // Skill categories
   getSkillCategories,
@@ -29,7 +28,6 @@ const router = Router();
 // Get mentor availability (public)
 router.get(
   "/availability/:mentorId",
-  cacheMiddleware({ ttl: 300, keyPrefix: 'mentor-availability' }),
   getMentorAvailability
 );
 
@@ -39,14 +37,12 @@ router.use(authenticateJWT);
 // Skill categories
 router.get(
   "/categories",
-  cacheMiddleware({ ttl: 3600, keyPrefix: 'skill-categories' }),
   getSkillCategories
 );
 
 // My skills
 router.get(
   "/skills",
-  cacheMiddleware({ ttl: 300, keyPrefix: 'my-skills' }),
   getMyMentorSkills
 );
 
@@ -69,7 +65,6 @@ router.post("/availability/weekly", setWeeklyAvailability);
 // Get my availability
 router.get(
   "/availability",
-  cacheMiddleware({ ttl: 300, keyPrefix: 'my-availability' }),
   getMyAvailability
 );
 
@@ -83,14 +78,12 @@ router.delete("/availability/:availabilityId", removeAvailability);
 // Get my sessions
 router.get(
   "/sessions",
-  cacheMiddleware({ ttl: 120, keyPrefix: 'my-sessions' }),
   getMentorSessions
 );
 
 // Get session details
 router.get(
   "/sessions/:sessionId",
-  cacheMiddleware({ ttl: 60, keyPrefix: 'session-detail' }),
   getSessionDetails
 );
 

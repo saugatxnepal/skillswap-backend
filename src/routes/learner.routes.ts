@@ -1,6 +1,5 @@
 import { Router } from "express";
 import { authenticateJWT } from "../middlewares/auth.middleware";
-import { cacheMiddleware } from "../middlewares/cache.middleware";
 import {
   getAllMentors,
   getMentorDetails,
@@ -14,13 +13,11 @@ const router = Router();
 // Public routes (no auth needed for browsing)
 router.get(
   "/mentors",
-  cacheMiddleware({ ttl: 300, keyPrefix: 'mentors' }),
   getAllMentors
 );
 
 router.get(
   "/mentors/:mentorId",
-  cacheMiddleware({ ttl: 3600, keyPrefix: 'mentor-details' }),
   getMentorDetails
 );
 
