@@ -12,80 +12,131 @@ import {
   deleteUser,
   getUserStats,
 } from "../controllers/user.controller";
+
 import { createUploader } from "../middlewares/uploadHandler";
 import { Role } from "../constants/roles";
-import { authorizeRoles } from "../middlewares/auth.middleware";
+import { authenticateJWT, authorizeRoles } from "../middlewares/auth.middleware";
 
 const router = Router();
 
 // Create uploader for profile images
-const profileUpload = createUploader('profiles');
+const profileUpload = createUploader("profiles");
 
 
-// ==================== USER ROUTES (no ID needed, uses JWT token) ====================
-// GET /users/me - Get current user profile
+// ==================== USER ROUTES (AUTH REQUIRED) ====================
+
+// GET /users/me
 router.get(
   "/me",
+  authenticateJWT,
   getCurrentUserProfile
 );
 
-// PUT/PATCH /users/me - Update current user profile (with file upload)
-router.put("/me", profileUpload.single('profileImage'), updateCurrentUserProfile);
-router.patch("/me", profileUpload.single('profileImage'), updateCurrentUserProfile);
+// UPDATE PROFILE
+router.put(
+  "/me",
+  authenticateJWT,
+  profileUpload.single("profileImage"),
+  updateCurrentUserProfile
+);
 
-// Password update
-router.put("/me/password", updateUserPassword);
-router.patch("/me/password", updateUserPassword);
+router.patch(
+  "/me",
+  authenticateJWT,
+  profileUpload.single("profileImage"),
+  updateCurrentUserProfile
+);
 
-// Notification preferences
-router.put("/me/notifications", updateNotificationPreferences);
-router.patch("/me/notifications", updateNotificationPreferences);
+// PASSWORD UPDATE
+router.put(
+  "/me/password",
+  authenticateJWT,
+  updateUserPassword
+);
 
-// ==================== ADMIN ROUTES (require admin role) ====================
-// GET requests with cache
+router.patch(
+  "/me/password",
+  authenticateJWT,
+  updateUserPassword
+);
+
+// NOTIFICATION SETTINGS
+router.put(
+  "/me/notifications",
+  authenticateJWT,
+  updateNotificationPreferences
+);
+
+router.patch(
+  "/me/notifications",
+  authenticateJWT,
+  updateNotificationPreferences
+);
+
+
+// ==================== ADMIN ROUTES ====================
+
+// GET ALL USERS
 router.get(
   "/",
-  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  authenticateJWT,
+  authorizeRoles(Role.Admin),
   getAllUsers
 );
 
+// GET USER STATS
 router.get(
   "/stats",
-  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  authenticateJWT,
+  authorizeRoles(Role.Admin),
   getUserStats
 );
 
+// GET USER BY ID (ADMIN or SELF handled in controller)
 router.get(
   "/:id",
+  authenticateJWT,
   getUserById
 );
 
-// Admin update routes (with file upload support)
+// UPDATE USER BY ID
 router.put(
   "/:id",
-  authorizeRoles(Role.Admin), // Pass the string "Admin"
-  profileUpload.single('profileImage'),
+  authenticateJWT,
+  authorizeRoles(Role.Admin),
+  profileUpload.single("profileImage"),
   updateUserProfileById
 );
+
 router.patch(
   "/:id",
-  authorizeRoles(Role.Admin), // Pass the string "Admin"
-  profileUpload.single('profileImage'),
+  authenticateJWT,
+  authorizeRoles(Role.Admin),
+  profileUpload.single("profileImage"),
   updateUserProfileById
 );
+
+// UPDATE ROLE
 router.patch(
   "/:id/role",
-  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  authenticateJWT,
+  authorizeRoles(Role.Admin),
   updateUserRole
 );
+
+// UPDATE STATUS
 router.patch(
   "/:id/status",
-  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  authenticateJWT,
+  authorizeRoles(Role.Admin),
   updateUserStatus
 );
+
+// DELETE USER
 router.delete(
   "/:id",
-  authorizeRoles(Role.Admin), // Pass the string "Admin"
+  authenticateJWT,
+  authorizeRoles(Role.Admin),
   deleteUser
 );
 

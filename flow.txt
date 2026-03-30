@@ -1,0 +1,99 @@
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           SKILL SWAP PLATFORM FLOW                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+1. USER REGISTRATION & AUTHENTICATION
+   ┌──────────┐     ┌──────────┐     ┌──────────┐
+   │  Admin   │     │  Mentor  │     │ Learner  │
+   └────┬─────┘     └────┬─────┘     └────┬─────┘
+        │                │                │
+        └────────────────┼────────────────┘
+                         ▼
+                  ┌─────────────┐
+                  │   Login     │
+                  │  Register   │
+                  └─────────────┘
+
+2. ADMIN SETUP (One-time)
+   ┌─────────────────────────────────────────────────────────────┐
+   │  Admin creates Skill Categories:                           │
+   │  - Programming, Design, Music, Language, etc.              │
+   │  Admin can also bulk import categories                     │
+   └─────────────────────────────────────────────────────────────┘
+
+3. MENTOR ONBOARDING
+   ┌─────────────────────────────────────────────────────────────┐
+   │  Mentor:                                                    │
+   │  1. Adds skills (with description, experience level,       │
+   │     teaching style)                                        │
+   │  2. Sets weekly availability (Monday 9AM-5PM, etc.)        │
+   │  3. Sets specific date availability (optional)              │
+   │  4. Toggles skills on/off as needed                        │
+   └─────────────────────────────────────────────────────────────┘
+
+4. LEARNER BROWSING
+   ┌─────────────────────────────────────────────────────────────┐
+   │  Learner:                                                   │
+   │  1. Browses mentors by category or skill                   │
+   │  2. Views mentor profiles with:                            │
+   │     - Skills and experience                                │
+   │     - Ratings and reviews                                  │
+   │     - Availability schedule                                │
+   │  3. Selects a mentor to learn from                         │
+   └─────────────────────────────────────────────────────────────┘
+
+5. SESSION REQUEST & SCHEDULING
+   ┌─────────────────────────────────────────────────────────────┐
+   │  Learner requests session:                                  │
+   │  - Selects skill                                            │
+   │  - Proposes time slots                                      │
+   │                                                             │
+   │  Mentor receives request and:                               │
+   │  - Proposes alternative time slots                          │
+   │  - Accepts/selects a time slot                             │
+   │                                                             │
+   │  Once time slot selected:                                   │
+   │  - Session status becomes SCHEDULED                        │
+   │  - Google Meet link auto-generated                         │
+   │  - Both parties get notifications                          │
+   └─────────────────────────────────────────────────────────────┘
+
+6. PRE-SESSION CHAT
+   ┌─────────────────────────────────────────────────────────────┐
+   │  Text chat available before session:                        │
+   │  - Discuss session details                                  │
+   │  - Share materials/resources                                │
+   │  - Coordinate timing                                        │
+   │  - File sharing (images, PDFs)                             │
+   └─────────────────────────────────────────────────────────────┘
+
+7. LIVE SESSION (VIDEO CALL)
+   ┌─────────────────────────────────────────────────────────────┐
+   │  Mentor starts session:                                     │
+   │  - Click "Start Session"                                   │
+   │  - Google Meet link becomes active                         │
+   │  - Both join video call                                    │
+   │  - Admin can monitor if needed                             │
+   │                                                             │
+   │  During session:                                           │
+   │  - Screen sharing                                          │
+   │  - Chat within meet                                        │
+   │  - Learners can ask questions (SessionQuestion)            │
+   │                                                             │
+   │  Mentor ends session:                                      │
+   │  - Duration recorded                                       │
+   │  - Session marked COMPLETED                                │
+   └─────────────────────────────────────────────────────────────┘
+
+8. POST-SESSION
+   ┌─────────────────────────────────────────────────────────────┐
+   │  Both parties can:                                          │
+   │  - Leave reviews with ratings (1-5 stars)                  │
+   │  - Add tags (knowledgeable, patient, etc.)                 │
+   │  - Report inappropriate behavior                           │
+   │                                                             │
+   │  System:                                                    │
+   │  - Updates mentor's average rating                         │
+   │  - Sends notifications                                     │
+   │  - Session recorded for history                            │
+   └─────────────────────────────────────────────────────────────┘
