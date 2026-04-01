@@ -148,7 +148,6 @@ export const addMentorSkill = asyncHandler(async (req: Request, res: Response) =
 export const getMyMentorSkills = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
-    const { includeUnavailable = false } = req.query;
 
     let queryText = `
       SELECT s.*, us."ExperienceLevel", us."TeachingStyle", 
@@ -158,13 +157,8 @@ export const getMyMentorSkills = asyncHandler(async (req: Request, res: Response
       JOIN "UserSkill" us ON s."SkillID" = us."SkillID"
       LEFT JOIN "SkillCategory" sc ON s."SkillCategoryID" = sc."SkillCategoryID"
       WHERE us."UserID" = $1 AND us."IsMentor" = true
+      ORDER BY sc."DisplayOrder", s."Name"
     `;
-    
-    if (!includeUnavailable) {
-      queryText += ` AND s."IsAvailable" = true`;
-    }
-
-    queryText += ` ORDER BY sc."DisplayOrder", s."Name"`;
 
     const result = await query(queryText, [userId]);
 
@@ -326,6 +320,7 @@ export const toggleSkillAvailability = asyncHandler(async (req: Request, res: Re
     });
   }
 });
+
 // Delete mentor skill
 export const deleteMentorSkill = asyncHandler(async (req: Request, res: Response) => {
   try {
