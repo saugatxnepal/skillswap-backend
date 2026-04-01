@@ -207,6 +207,7 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
       });
     }
 
+    // Update skill details
     if (name || description || detailedContent || isAvailable !== undefined) {
       const updates: string[] = [];
       const values: any[] = [];
@@ -239,6 +240,7 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
       );
     }
 
+    // Update user skill details
     if (experienceLevel !== undefined || teachingStyle !== undefined) {
       const updates: string[] = [];
       const values: any[] = [];
@@ -385,11 +387,13 @@ export const setWeeklyAvailability = asyncHandler(async (req: Request, res: Resp
       });
     }
 
+    // Delete existing recurring availability for this user
     await query(
       `DELETE FROM "Availability" WHERE "UserID" = $1 AND "IsRecurring" = true`,
       [userId]
     );
 
+    // Insert new availability
     const inserted = [];
     for (const slot of availability) {
       const { dayOfWeek, startTime, endTime } = slot;
@@ -398,10 +402,12 @@ export const setWeeklyAvailability = asyncHandler(async (req: Request, res: Resp
         continue;
       }
 
+      // FIXED: Added CreatedAt and UpdatedAt with NOW()
       const result = await query(
         `INSERT INTO "Availability" 
-         ("AvailabilityID", "UserID", "DayOfWeek", "StartTime", "EndTime", "IsRecurring", "IsActive")
-         VALUES (gen_random_uuid(), $1, $2, $3, $4, true, true)
+         ("AvailabilityID", "UserID", "DayOfWeek", "StartTime", "EndTime", 
+          "IsRecurring", "IsActive", "CreatedAt", "UpdatedAt")
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, true, true, NOW(), NOW())
          RETURNING *`,
         [userId, dayOfWeek, startTime, endTime]
       );
@@ -514,10 +520,13 @@ export const addSpecificAvailability = asyncHandler(async (req: Request, res: Re
       });
     }
 
+    // FIXED: Added CreatedAt and UpdatedAt with NOW()
     const result = await query(
       `INSERT INTO "Availability" 
-       ("AvailabilityID", "UserID", "DayOfWeek", "StartTime", "EndTime", "IsRecurring", "SpecificDate", "IsActive")
-       VALUES (gen_random_uuid(), $1, EXTRACT(DOW FROM $2::date), $3, $4, false, $2, true)
+       ("AvailabilityID", "UserID", "DayOfWeek", "StartTime", "EndTime", 
+        "IsRecurring", "SpecificDate", "IsActive", "CreatedAt", "UpdatedAt")
+       VALUES (gen_random_uuid(), $1, EXTRACT(DOW FROM $2::date), $3, $4, 
+               false, $2, true, NOW(), NOW())
        RETURNING *`,
       [userId, specificDate, startTime, endTime]
     );
