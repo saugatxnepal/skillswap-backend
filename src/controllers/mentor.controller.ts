@@ -207,7 +207,7 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
       });
     }
 
-    // Update skill details
+    // Update skill details (Skill table has NO UpdatedAt)
     if (name || description || detailedContent || isAvailable !== undefined) {
       const updates: string[] = [];
       const values: any[] = [];
@@ -230,7 +230,7 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
         values.push(isAvailable);
       }
 
-      updates.push(`"UpdatedAt" = NOW()`);
+      // REMOVED: `"UpdatedAt" = NOW()` - Skill table doesn't have this column
       values.push(skillId);
       await query(
         `UPDATE "Skill" 
@@ -240,7 +240,7 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
       );
     }
 
-    // Update user skill details
+    // Update user skill details (UserSkill table HAS UpdatedAt)
     if (experienceLevel !== undefined || teachingStyle !== undefined) {
       const updates: string[] = [];
       const values: any[] = [];
@@ -255,7 +255,7 @@ export const updateMentorSkill = asyncHandler(async (req: Request, res: Response
         values.push(teachingStyle);
       }
 
-      updates.push(`"UpdatedAt" = NOW()`);
+      updates.push(`"UpdatedAt" = NOW()`); // UserSkill has UpdatedAt
       values.push(userId, skillId);
       await query(
         `UPDATE "UserSkill" 
@@ -304,9 +304,10 @@ export const toggleSkillAvailability = asyncHandler(async (req: Request, res: Re
       });
     }
 
+    // REMOVED: "UpdatedAt" = NOW() - Skill table doesn't have this column
     const result = await query(
       `UPDATE "Skill" 
-       SET "IsAvailable" = $1, "UpdatedAt" = NOW()
+       SET "IsAvailable" = $1
        WHERE "SkillID" = $2
        RETURNING *`,
       [isAvailable, skillId]
@@ -325,7 +326,6 @@ export const toggleSkillAvailability = asyncHandler(async (req: Request, res: Re
     });
   }
 });
-
 // Delete mentor skill
 export const deleteMentorSkill = asyncHandler(async (req: Request, res: Response) => {
   try {
