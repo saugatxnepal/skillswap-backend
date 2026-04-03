@@ -38,11 +38,11 @@ export const getOrCreateConversation = asyncHandler(async (req: Request, res: Re
       });
     }
 
-    // Check if conversation exists
+    // Check if conversation exists - FIXED: Use exact column names with quotes
     let conversation = await query(
       `SELECT * FROM "Conversation" 
-       WHERE (Participant1ID = $1 AND Participant2ID = $2) 
-          OR (Participant1ID = $2 AND Participant2ID = $1)`,
+       WHERE ("Participant1ID" = $1 AND "Participant2ID" = $2) 
+          OR ("Participant1ID" = $2 AND "Participant2ID" = $1)`,
       [currentUserId, otherUserId]
     );
 
@@ -80,7 +80,7 @@ export const getOrCreateConversation = asyncHandler(async (req: Request, res: Re
   }
 });
 
-// Get all conversations for current user
+// Get all conversations for current user - FIXED
 export const getConversations = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -91,29 +91,29 @@ export const getConversations = asyncHandler(async (req: Request, res: Response)
     const result = await query(
       `SELECT c.*,
               CASE 
-                WHEN c.Participant1ID = $1 THEN u2."FullName" 
+                WHEN c."Participant1ID" = $1 THEN u2."FullName" 
                 ELSE u1."FullName" 
               END as "otherUserName",
               CASE 
-                WHEN c.Participant1ID = $1 THEN u2."ProfileImageURL" 
+                WHEN c."Participant1ID" = $1 THEN u2."ProfileImageURL" 
                 ELSE u1."ProfileImageURL" 
               END as "otherUserImage",
               CASE 
-                WHEN c.Participant1ID = $1 THEN u2."UserID" 
+                WHEN c."Participant1ID" = $1 THEN u2."UserID" 
                 ELSE u1."UserID" 
               END as "otherUserId",
               CASE 
-                WHEN c.Participant1ID = $1 THEN u2."IsOnline" 
+                WHEN c."Participant1ID" = $1 THEN u2."IsOnline" 
                 ELSE u1."IsOnline" 
               END as "otherUserOnline",
               COALESCE(c."LastMessage", '') as "lastMessage",
               c."LastMessageAt",
               COUNT(CASE WHEN m."IsRead" = false AND m."SenderID" != $1 AND m."IsDeleted" = false THEN 1 END) as "unreadCount"
        FROM "Conversation" c
-       JOIN "User" u1 ON c.Participant1ID = u1."UserID"
-       JOIN "User" u2 ON c.Participant2ID = u2."UserID"
+       JOIN "User" u1 ON c."Participant1ID" = u1."UserID"
+       JOIN "User" u2 ON c."Participant2ID" = u2."UserID"
        LEFT JOIN "Message" m ON c."ConversationID" = m."ConversationID"
-       WHERE c.Participant1ID = $1 OR c.Participant2ID = $1
+       WHERE c."Participant1ID" = $1 OR c."Participant2ID" = $1
        GROUP BY c."ConversationID", u1."UserID", u2."UserID", u1."FullName", u2."FullName",
                 u1."ProfileImageURL", u2."ProfileImageURL", u1."IsOnline", u2."IsOnline"
        ORDER BY c."LastMessageAt" DESC NULLS LAST
@@ -124,7 +124,7 @@ export const getConversations = asyncHandler(async (req: Request, res: Response)
     // Get total count
     const countResult = await query(
       `SELECT COUNT(*) FROM "Conversation" 
-       WHERE Participant1ID = $1 OR Participant2ID = $1`,
+       WHERE "Participant1ID" = $1 OR "Participant2ID" = $1`,
       [userId]
     );
     const total = parseInt(countResult.rows[0].count);
@@ -150,7 +150,7 @@ export const getConversations = asyncHandler(async (req: Request, res: Response)
   }
 });
 
-// Get messages for a conversation
+// Get messages for a conversation - FIXED
 export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -161,7 +161,7 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
     // Check if user is part of conversation
     const convCheck = await query(
       `SELECT * FROM "Conversation" 
-       WHERE "ConversationID" = $1 AND (Participant1ID = $2 OR Participant2ID = $2)`,
+       WHERE "ConversationID" = $1 AND ("Participant1ID" = $2 OR "Participant2ID" = $2)`,
       [conversationId, userId]
     );
 
@@ -214,7 +214,7 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   }
 });
 
-// Send a message (REST fallback)
+// Send a message (REST fallback) - FIXED
 export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -231,9 +231,9 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
     // Check if user is part of conversation
     const convCheck = await query(
       `SELECT c.*, 
-              CASE WHEN c.Participant1ID = $2 THEN c.Participant2ID ELSE c.Participant1ID END as "ReceiverID"
+              CASE WHEN c."Participant1ID" = $2 THEN c."Participant2ID" ELSE c."Participant1ID" END as "ReceiverID"
        FROM "Conversation" c
-       WHERE c."ConversationID" = $1 AND (c.Participant1ID = $2 OR c.Participant2ID = $2)`,
+       WHERE c."ConversationID" = $1 AND (c."Participant1ID" = $2 OR c."Participant2ID" = $2)`,
       [conversationId, userId]
     );
 
@@ -289,7 +289,7 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
   }
 });
 
-// Delete message (soft delete for user)
+// Delete message (soft delete for user) - FIXED
 export const deleteMessage = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -344,7 +344,7 @@ export const deleteMessage = asyncHandler(async (req: Request, res: Response) =>
   }
 });
 
-// Get total unread count
+// Get total unread count - FIXED
 export const getUnreadCount = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -353,7 +353,7 @@ export const getUnreadCount = asyncHandler(async (req: Request, res: Response) =
       `SELECT COUNT(*) as unread_count
        FROM "Message" m
        JOIN "Conversation" c ON m."ConversationID" = c."ConversationID"
-       WHERE (c.Participant1ID = $1 OR c.Participant2ID = $1)
+       WHERE (c."Participant1ID" = $1 OR c."Participant2ID" = $1)
          AND m."SenderID" != $1 
          AND m."IsRead" = false
          AND m."IsDeleted" = false`,
