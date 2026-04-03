@@ -15,25 +15,17 @@ interface SocketUser {
 
 // Store online users
 const onlineUsers = new Map<string, SocketUser>();
-
-// Helper to get user socket
-const getUserSocket = (userId: string): Socket | undefined => {
-  const user = onlineUsers.get(userId);
-  if (!user) return undefined;
-  // This needs to be implemented with socket reference storage
-  return undefined;
-};
+// Store socket references for direct messaging
+const socketRefs = new Map<string, Socket>();
 
 export const setupSocket = (server: HttpServer) => {
   const io = new SocketServer(server, {
     cors: {
-      origin: process.env.FRONTEND_URL || '*',
+      origin: process.env.FRONTEND_URL || 'http://localhost:3000',
       credentials: true,
     },
+    transports: ['websocket', 'polling'],
   });
-
-  // Store socket references
-  const socketRefs = new Map<string, Socket>();
 
   // Authentication middleware
   io.use(async (socket, next) => {
@@ -47,7 +39,7 @@ export const setupSocket = (server: HttpServer) => {
       
       const userResult = await query(
         `SELECT "UserID", "Role", "FullName", "ProfileImageURL" 
-         FROM "User" WHERE "UserID" = $1 AND "Status" = 'Active'`,
+         FROM "User" WHERE "UserID" = $1::uuid AND "Status" = 'Active'`,
         [decoded.id]
       );
 
@@ -65,6 +57,7 @@ export const setupSocket = (server: HttpServer) => {
       
       next();
     } catch (err) {
+      console.error('[Socket] Auth error:', err);
       next(new Error('Invalid token'));
     }
   });
@@ -78,7 +71,7 @@ export const setupSocket = (server: HttpServer) => {
 
     // Update user online status in database
     query(
-      `UPDATE "User" SET "IsOnline" = true, "LastSeen" = NOW() WHERE "UserID" = $1`,
+      `UPDATE "User" SET "IsOnline" = true, "LastSeen" = NOW() WHERE "UserID" = $1::uuid`,
       [user.userId]
     ).catch(console.error);
 
@@ -98,13 +91,175 @@ export const setupSocket = (server: HttpServer) => {
       role: user.role,
     });
 
-    // ==================== SESSION CHAT (Legacy - Keep for backward compatibility) ====================
+    // ==================== DIRECT MESSAGING (SOCIAL MEDIA STYLE) ====================
+
+    // Send DM message
+    socket.on('chat:send', async (data) => {
+      const { conversationId, content, messageType = 'TEXT', replyToId } = data;
+      
+      try {
+        // Get conversation details with proper UUID casting
+        const convResult = await query(
+          `SELECT c.*, 
+                  CASE WHEN c."Participant1ID" = $2::uuid THEN c."Participant2ID" ELSE c."Participant1ID" END as "ReceiverID"
+           FROM "Conversation" c
+           WHERE c."ConversationID" = $1::uuid`,
+          [conversationId, user.userId]
+        );
+        
+        if (convResult.rows.length === 0) {
+          socket.emit('chat:error', { error: 'Conversation not found' });
+          return;
+        }
+        
+        const conversation = convResult.rows[0];
+        const receiverId = conversation.receiverid;
+        
+        // Insert message
+        const result = await query(
+          `INSERT INTO "Message" 
+           ("MessageID", "ConversationID", "SenderID", "ReceiverID", "Content", "MessageType", 
+            "ReplyToID", "IsRead", "CreatedAt", "UpdatedAt")
+           VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, false, NOW(), NOW())
+           RETURNING *`,
+          [conversationId, user.userId, receiverId, content, messageType, replyToId || null]
+        );
+        
+        const message = result.rows[0];
+        
+        // Update conversation
+        await query(
+          `UPDATE "Conversation" 
+           SET "LastMessage" = $1, "LastMessageAt" = NOW(), "UpdatedAt" = NOW()
+           WHERE "ConversationID" = $2::uuid`,
+          [content.substring(0, 100), conversationId]
+        );
+        
+        // Get sender info
+        const senderInfo = {
+          MessageID: message.MessageID,
+          ConversationID: message.ConversationID,
+          SenderID: message.SenderID,
+          Content: message.Content,
+          MessageType: message.MessageType,
+          CreatedAt: message.CreatedAt,
+          senderName: user.fullName,
+          senderImage: user.profileImage,
+        };
+        
+        // Send to recipient if online
+        const recipientSocket = socketRefs.get(receiverId);
+        if (recipientSocket && recipientSocket.connected) {
+          recipientSocket.emit('chat:new', senderInfo);
+        }
+        
+        // Send back to sender
+        socket.emit('chat:sent', senderInfo);
+        
+        // Create notification for offline user
+        await query(
+          `INSERT INTO "Notification" 
+           ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
+           VALUES (gen_random_uuid(), $1::uuid, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
+          [receiverId, "New Message", 
+           `${user.fullName} sent you a message: ${content.substring(0, 50)}...`,
+           JSON.stringify({ conversationId, messageId: message.MessageID })]
+        );
+        
+      } catch (error) {
+        console.error('[Socket] Chat send error:', error);
+        socket.emit('chat:error', { error: 'Failed to send message' });
+      }
+    });
+
+    // Typing indicator for DM
+    socket.on('chat:typing:start', async ({ conversationId }) => {
+      const convResult = await query(
+        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
+        [conversationId]
+      );
+      
+      if (convResult.rows.length === 0) return;
+      
+      const conversation = convResult.rows[0];
+      const otherUserId = conversation.Participant1ID === user.userId 
+        ? conversation.Participant2ID 
+        : conversation.Participant1ID;
+      
+      const recipientSocket = socketRefs.get(otherUserId);
+      if (recipientSocket && recipientSocket.connected) {
+        recipientSocket.emit('chat:typing', {
+          userId: user.userId,
+          fullName: user.fullName,
+          isTyping: true,
+        });
+      }
+    });
+
+    socket.on('chat:typing:stop', async ({ conversationId }) => {
+      const convResult = await query(
+        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
+        [conversationId]
+      );
+      
+      if (convResult.rows.length === 0) return;
+      
+      const conversation = convResult.rows[0];
+      const otherUserId = conversation.Participant1ID === user.userId 
+        ? conversation.Participant2ID 
+        : conversation.Participant1ID;
+      
+      const recipientSocket = socketRefs.get(otherUserId);
+      if (recipientSocket && recipientSocket.connected) {
+        recipientSocket.emit('chat:typing', {
+          userId: user.userId,
+          fullName: user.fullName,
+          isTyping: false,
+        });
+      }
+    });
+
+    // Mark messages as read in DM
+    socket.on('chat:read', async ({ conversationId, messageIds }) => {
+      if (!messageIds || messageIds.length === 0) return;
+      
+      await query(
+        `UPDATE "Message" 
+         SET "IsRead" = true, "ReadAt" = NOW()
+         WHERE "MessageID" = ANY($1::uuid[]) AND "SenderID" != $2::uuid`,
+        [messageIds, user.userId]
+      );
+      
+      // Notify sender
+      const convResult = await query(
+        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
+        [conversationId]
+      );
+      
+      if (convResult.rows.length === 0) return;
+      
+      const conversation = convResult.rows[0];
+      const otherUserId = conversation.Participant1ID === user.userId 
+        ? conversation.Participant2ID 
+        : conversation.Participant1ID;
+      
+      const recipientSocket = socketRefs.get(otherUserId);
+      if (recipientSocket && recipientSocket.connected) {
+        recipientSocket.emit('chat:read-receipt', { 
+          messageIds, 
+          readBy: user.userId,
+          readAt: new Date().toISOString()
+        });
+      }
+    });
+
+    // ==================== SESSION CHAT (Legacy) ====================
 
     // Join session room
     socket.on('session:join', async (sessionId: string) => {
       const sessionCheck = await query(
         `SELECT * FROM "Session" 
-         WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
+         WHERE "SessionID" = $1::uuid AND ("MentorID" = $2::uuid OR "LearnerID" = $2::uuid)`,
         [sessionId, user.userId]
       );
 
@@ -136,7 +291,7 @@ export const setupSocket = (server: HttpServer) => {
       try {
         const sessionCheck = await query(
           `SELECT * FROM "Session" 
-           WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
+           WHERE "SessionID" = $1::uuid AND ("MentorID" = $2::uuid OR "LearnerID" = $2::uuid)`,
           [sessionId, user.userId]
         );
 
@@ -151,7 +306,7 @@ export const setupSocket = (server: HttpServer) => {
           `INSERT INTO "Message" 
            ("MessageID", "SessionID", "SenderID", "Content", "MessageType", 
             "FileURL", "FileName", "ReplyToID", "CreatedAt", "UpdatedAt")
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+           VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3, $4, $5, $6, $7, NOW(), NOW())
            RETURNING *`,
           [sessionId, user.userId, content, messageType, fileUrl || null, fileName || null, replyToId || null]
         );
@@ -172,7 +327,7 @@ export const setupSocket = (server: HttpServer) => {
         await query(
           `INSERT INTO "Notification" 
            ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
-           VALUES (gen_random_uuid(), $1, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
+           VALUES (gen_random_uuid(), $1::uuid, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
           [otherUserId, "New Message", 
            `${user.fullName} sent a message: ${content.substring(0, 50)}...`,
            JSON.stringify({ sessionId, messageId: message.MessageID })]
@@ -184,168 +339,6 @@ export const setupSocket = (server: HttpServer) => {
       }
     });
 
-    // ==================== DIRECT MESSAGING (NEW SOCIAL MEDIA STYLE) ====================
-
-    // Send DM message
-    socket.on('chat:send', async (data) => {
-      const { conversationId, content, messageType = 'TEXT', replyToId } = data;
-      
-      try {
-        // Get conversation details
-        const convResult = await query(
-          `SELECT c.*, 
-                  CASE WHEN c.Participant1ID = $2 THEN c.Participant2ID ELSE c.Participant1ID END as "ReceiverID"
-           FROM "Conversation" c
-           WHERE c."ConversationID" = $1`,
-          [conversationId, user.userId]
-        );
-        
-        if (convResult.rows.length === 0) {
-          socket.emit('chat:error', { error: 'Conversation not found' });
-          return;
-        }
-        
-        const conversation = convResult.rows[0];
-        const receiverId = conversation.receiverid;
-        
-        // Insert message
-        const result = await query(
-          `INSERT INTO "Message" 
-           ("MessageID", "ConversationID", "SenderID", "ReceiverID", "Content", "MessageType", 
-            "ReplyToID", "IsRead", "CreatedAt", "UpdatedAt")
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, false, NOW(), NOW())
-           RETURNING *`,
-          [conversationId, user.userId, receiverId, content, messageType, replyToId || null]
-        );
-        
-        const message = result.rows[0];
-        
-        // Update conversation
-        await query(
-          `UPDATE "Conversation" 
-           SET "LastMessage" = $1, "LastMessageAt" = NOW(), "UpdatedAt" = NOW()
-           WHERE "ConversationID" = $2`,
-          [content.substring(0, 100), conversationId]
-        );
-        
-        // Get sender info
-        const senderInfo = {
-          MessageID: message.MessageID,
-          ConversationID: message.ConversationID,
-          SenderID: message.SenderID,
-          Content: message.Content,
-          MessageType: message.MessageType,
-          CreatedAt: message.CreatedAt,
-          senderName: user.fullName,
-          senderImage: user.profileImage,
-        };
-        
-        // Send to recipient if online
-        const recipientSocket = socketRefs.get(receiverId);
-        if (recipientSocket) {
-          recipientSocket.emit('chat:new', senderInfo);
-        }
-        
-        // Send back to sender
-        socket.emit('chat:sent', senderInfo);
-        
-        // Create notification for offline user
-        await query(
-          `INSERT INTO "Notification" 
-           ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
-           VALUES (gen_random_uuid(), $1, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
-          [receiverId, "New Message", 
-           `${user.fullName} sent you a message: ${content.substring(0, 50)}...`,
-           JSON.stringify({ conversationId, messageId: message.MessageID })]
-        );
-        
-      } catch (error) {
-        console.error('[Socket] Chat send error:', error);
-        socket.emit('chat:error', { error: 'Failed to send message' });
-      }
-    });
-
-    // Typing indicator for DM
-    socket.on('chat:typing:start', async ({ conversationId }) => {
-      const convResult = await query(
-        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
-        [conversationId]
-      );
-      
-      if (convResult.rows.length === 0) return;
-      
-      const conversation = convResult.rows[0];
-      const otherUserId = conversation.Participant1ID === user.userId 
-        ? conversation.Participant2ID 
-        : conversation.Participant1ID;
-      
-      const recipientSocket = socketRefs.get(otherUserId);
-      if (recipientSocket) {
-        recipientSocket.emit('chat:typing', {
-          userId: user.userId,
-          fullName: user.fullName,
-          isTyping: true,
-        });
-      }
-    });
-
-    socket.on('chat:typing:stop', async ({ conversationId }) => {
-      const convResult = await query(
-        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
-        [conversationId]
-      );
-      
-      if (convResult.rows.length === 0) return;
-      
-      const conversation = convResult.rows[0];
-      const otherUserId = conversation.Participant1ID === user.userId 
-        ? conversation.Participant2ID 
-        : conversation.Participant1ID;
-      
-      const recipientSocket = socketRefs.get(otherUserId);
-      if (recipientSocket) {
-        recipientSocket.emit('chat:typing', {
-          userId: user.userId,
-          fullName: user.fullName,
-          isTyping: false,
-        });
-      }
-    });
-
-    // Mark messages as read in DM
-    socket.on('chat:read', async ({ conversationId, messageIds }) => {
-      await query(
-        `UPDATE "Message" 
-         SET "IsRead" = true, "ReadAt" = NOW()
-         WHERE "MessageID" = ANY($1::uuid[]) AND "SenderID" != $2`,
-        [messageIds, user.userId]
-      );
-      
-      // Notify sender
-      const convResult = await query(
-        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
-        [conversationId]
-      );
-      
-      if (convResult.rows.length === 0) return;
-      
-      const conversation = convResult.rows[0];
-      const otherUserId = conversation.Participant1ID === user.userId 
-        ? conversation.Participant2ID 
-        : conversation.Participant1ID;
-      
-      const recipientSocket = socketRefs.get(otherUserId);
-      if (recipientSocket) {
-        recipientSocket.emit('chat:read-receipt', { 
-          messageIds, 
-          readBy: user.userId,
-          readAt: new Date().toISOString()
-        });
-      }
-    });
-
-    // ==================== COMMON EVENTS ====================
-
     // Mark session message as read
     socket.on('message:read', async (data: { sessionId: string, messageIds: string[] }) => {
       const { sessionId, messageIds } = data;
@@ -355,8 +348,8 @@ export const setupSocket = (server: HttpServer) => {
           `UPDATE "Message" 
            SET "ReadAt" = NOW()
            WHERE "MessageID" = ANY($1::uuid[]) 
-             AND "SessionID" = $2 
-             AND "SenderID" != $3`,
+             AND "SessionID" = $2::uuid 
+             AND "SenderID" != $3::uuid`,
           [messageIds, sessionId, user.userId]
         );
         
@@ -395,7 +388,7 @@ export const setupSocket = (server: HttpServer) => {
         const result = await query(
           `UPDATE "Message" 
            SET "Content" = $1, "IsEdited" = true, "EditedAt" = NOW()
-           WHERE "MessageID" = $2 AND "SenderID" = $3
+           WHERE "MessageID" = $2::uuid AND "SenderID" = $3::uuid
            RETURNING "SessionID", "ConversationID"`,
           [content, messageId, user.userId]
         );
@@ -409,9 +402,8 @@ export const setupSocket = (server: HttpServer) => {
               editedAt: new Date().toISOString(),
             });
           } else if (ConversationID) {
-            // Get conversation participants
             const convResult = await query(
-              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
+              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
               [ConversationID]
             );
             if (convResult.rows.length > 0) {
@@ -421,7 +413,7 @@ export const setupSocket = (server: HttpServer) => {
                 : conversation.Participant1ID;
               
               const recipientSocket = socketRefs.get(otherUserId);
-              if (recipientSocket) {
+              if (recipientSocket && recipientSocket.connected) {
                 recipientSocket.emit('chat:message-edited', {
                   messageId,
                   content,
@@ -449,7 +441,7 @@ export const setupSocket = (server: HttpServer) => {
         const result = await query(
           `UPDATE "Message" 
            SET "IsDeleted" = true, "UpdatedAt" = NOW()
-           WHERE "MessageID" = $1 AND "SenderID" = $2
+           WHERE "MessageID" = $1::uuid AND "SenderID" = $2::uuid
            RETURNING "SessionID", "ConversationID"`,
           [messageId, user.userId]
         );
@@ -460,7 +452,7 @@ export const setupSocket = (server: HttpServer) => {
             io.to(`session:${SessionID}`).emit('message:deleted', { messageId });
           } else if (ConversationID) {
             const convResult = await query(
-              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
+              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
               [ConversationID]
             );
             if (convResult.rows.length > 0) {
@@ -470,7 +462,7 @@ export const setupSocket = (server: HttpServer) => {
                 : conversation.Participant1ID;
               
               const recipientSocket = socketRefs.get(otherUserId);
-              if (recipientSocket) {
+              if (recipientSocket && recipientSocket.connected) {
                 recipientSocket.emit('chat:message-deleted', { messageId });
               }
               socket.emit('chat:message-deleted', { messageId });
@@ -509,7 +501,7 @@ export const setupSocket = (server: HttpServer) => {
       
       // Update user offline status in database
       await query(
-        `UPDATE "User" SET "IsOnline" = false, "LastSeen" = NOW() WHERE "UserID" = $1`,
+        `UPDATE "User" SET "IsOnline" = false, "LastSeen" = NOW() WHERE "UserID" = $1::uuid`,
         [user.userId]
       ).catch(console.error);
       
