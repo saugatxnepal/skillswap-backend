@@ -13,6 +13,7 @@ import reportRoutes from "./routes/report.routes";
 import sessionQuestionRoutes from "./routes/sessionQuestion.routes";
 import sessionInviteRoutes from "./routes/sessionInvite.routes";
 import adminDashboardRoutes from "./routes/adminDashboard.routes";
+import chatRoutes from "./routes/chat.routes";
 import websocketRoutes from "./routes/websocket.routes"; // Add this
 import { FRONTEND_URL } from "./config/env";
 import { errorHandler } from "./middlewares/errorHandler";
@@ -54,6 +55,7 @@ app.use("/api/session-questions", sessionQuestionRoutes);
 app.use("/api/session-invites", sessionInviteRoutes);
 app.use("/api/admin", adminDashboardRoutes);
 app.use("/api/websocket", websocketRoutes);
+app.use("/api/chat", chatRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {
