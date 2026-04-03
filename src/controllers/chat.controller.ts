@@ -24,10 +24,10 @@ export const getOrCreateConversation = asyncHandler(async (req: Request, res: Re
       });
     }
 
-    // Check if other user exists
+    // Check if other user exists - use text comparison since UserID is text
     const userCheck = await query(
       `SELECT "UserID", "FullName", "ProfileImageURL", "Role", "Status", "IsOnline"
-       FROM "User" WHERE "UserID" = $1::uuid`,
+       FROM "User" WHERE "UserID" = $1`,
       [otherUserId]
     );
 
@@ -38,11 +38,11 @@ export const getOrCreateConversation = asyncHandler(async (req: Request, res: Re
       });
     }
 
-    // Check if conversation exists
+    // Check if conversation exists - use text comparison
     let conversation = await query(
       `SELECT * FROM "Conversation" 
-       WHERE ("Participant1ID" = $1::uuid AND "Participant2ID" = $2::uuid) 
-          OR ("Participant1ID" = $2::uuid AND "Participant2ID" = $1::uuid)`,
+       WHERE ("Participant1ID" = $1 AND "Participant2ID" = $2) 
+          OR ("Participant1ID" = $2 AND "Participant2ID" = $1)`,
       [currentUserId, otherUserId]
     );
 
@@ -51,7 +51,7 @@ export const getOrCreateConversation = asyncHandler(async (req: Request, res: Re
       const result = await query(
         `INSERT INTO "Conversation" 
          ("ConversationID", "Participant1ID", "Participant2ID", "CreatedAt", "UpdatedAt")
-         VALUES (gen_random_uuid(), $1::uuid, $2::uuid, NOW(), NOW())
+         VALUES (gen_random_uuid(), $1, $2, NOW(), NOW())
          RETURNING *`,
         [currentUserId, otherUserId]
       );
@@ -91,29 +91,29 @@ export const getConversations = asyncHandler(async (req: Request, res: Response)
     const result = await query(
       `SELECT c.*,
               CASE 
-                WHEN c."Participant1ID" = $1::uuid THEN u2."FullName" 
+                WHEN c."Participant1ID" = $1 THEN u2."FullName" 
                 ELSE u1."FullName" 
               END as "otherUserName",
               CASE 
-                WHEN c."Participant1ID" = $1::uuid THEN u2."ProfileImageURL" 
+                WHEN c."Participant1ID" = $1 THEN u2."ProfileImageURL" 
                 ELSE u1."ProfileImageURL" 
               END as "otherUserImage",
               CASE 
-                WHEN c."Participant1ID" = $1::uuid THEN u2."UserID" 
+                WHEN c."Participant1ID" = $1 THEN u2."UserID" 
                 ELSE u1."UserID" 
               END as "otherUserId",
               CASE 
-                WHEN c."Participant1ID" = $1::uuid THEN u2."IsOnline" 
+                WHEN c."Participant1ID" = $1 THEN u2."IsOnline" 
                 ELSE u1."IsOnline" 
               END as "otherUserOnline",
               COALESCE(c."LastMessage", '') as "lastMessage",
               c."LastMessageAt",
-              COUNT(CASE WHEN m."IsRead" = false AND m."SenderID" != $1::uuid AND m."IsDeleted" = false THEN 1 END) as "unreadCount"
+              COUNT(CASE WHEN m."IsRead" = false AND m."SenderID" != $1 AND m."IsDeleted" = false THEN 1 END) as "unreadCount"
        FROM "Conversation" c
        JOIN "User" u1 ON c."Participant1ID" = u1."UserID"
        JOIN "User" u2 ON c."Participant2ID" = u2."UserID"
        LEFT JOIN "Message" m ON c."ConversationID" = m."ConversationID"
-       WHERE c."Participant1ID" = $1::uuid OR c."Participant2ID" = $1::uuid
+       WHERE c."Participant1ID" = $1 OR c."Participant2ID" = $1
        GROUP BY c."ConversationID", u1."UserID", u2."UserID", u1."FullName", u2."FullName",
                 u1."ProfileImageURL", u2."ProfileImageURL", u1."IsOnline", u2."IsOnline"
        ORDER BY c."LastMessageAt" DESC NULLS LAST
@@ -124,7 +124,7 @@ export const getConversations = asyncHandler(async (req: Request, res: Response)
     // Get total count
     const countResult = await query(
       `SELECT COUNT(*) FROM "Conversation" 
-       WHERE "Participant1ID" = $1::uuid OR "Participant2ID" = $1::uuid`,
+       WHERE "Participant1ID" = $1 OR "Participant2ID" = $1`,
       [userId]
     );
     const total = parseInt(countResult.rows[0].count);
@@ -161,7 +161,7 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
     // Check if user is part of conversation
     const convCheck = await query(
       `SELECT * FROM "Conversation" 
-       WHERE "ConversationID" = $1::uuid AND ("Participant1ID" = $2::uuid OR "Participant2ID" = $2::uuid)`,
+       WHERE "ConversationID" = $1 AND ("Participant1ID" = $2 OR "Participant2ID" = $2)`,
       [conversationId, userId]
     );
 
@@ -176,14 +176,14 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
       SELECT m.*, u."FullName" as "SenderName", u."ProfileImageURL" as "SenderImage"
       FROM "Message" m
       JOIN "User" u ON m."SenderID" = u."UserID"
-      WHERE m."ConversationID" = $1::uuid AND m."IsDeleted" = false
+      WHERE m."ConversationID" = $1 AND m."IsDeleted" = false
     `;
     const params: any[] = [conversationId];
     let paramCount = 1;
 
     if (before) {
       paramCount++;
-      queryText += ` AND m."CreatedAt" < $${paramCount}::timestamptz`;
+      queryText += ` AND m."CreatedAt" < $${paramCount}`;
       params.push(before);
     }
 
@@ -197,7 +197,7 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
     await query(
       `UPDATE "Message" 
        SET "IsRead" = true, "ReadAt" = NOW()
-       WHERE "ConversationID" = $1::uuid AND "SenderID" != $2::uuid AND "IsRead" = false`,
+       WHERE "ConversationID" = $1 AND "SenderID" != $2 AND "IsRead" = false`,
       [conversationId, userId]
     );
 
@@ -231,9 +231,9 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
     // Check if user is part of conversation
     const convCheck = await query(
       `SELECT c.*, 
-              CASE WHEN c."Participant1ID" = $2::uuid THEN c."Participant2ID" ELSE c."Participant1ID" END as "ReceiverID"
+              CASE WHEN c."Participant1ID" = $2 THEN c."Participant2ID" ELSE c."Participant1ID" END as "ReceiverID"
        FROM "Conversation" c
-       WHERE c."ConversationID" = $1::uuid AND (c."Participant1ID" = $2::uuid OR c."Participant2ID" = $2::uuid)`,
+       WHERE c."ConversationID" = $1 AND (c."Participant1ID" = $2 OR c."Participant2ID" = $2)`,
       [conversationId, userId]
     );
 
@@ -252,7 +252,7 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
       `INSERT INTO "Message" 
        ("MessageID", "ConversationID", "SenderID", "ReceiverID", "Content", "MessageType", 
         "ReplyToID", "IsRead", "CreatedAt", "UpdatedAt")
-       VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, false, NOW(), NOW())
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, false, NOW(), NOW())
        RETURNING *`,
       [conversationId, userId, receiverId, content.trim(), messageType, replyToId || null]
     );
@@ -263,13 +263,13 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
     await query(
       `UPDATE "Conversation" 
        SET "LastMessage" = $1, "LastMessageAt" = NOW(), "UpdatedAt" = NOW()
-       WHERE "ConversationID" = $2::uuid`,
+       WHERE "ConversationID" = $2`,
       [content.trim().substring(0, 100), conversationId]
     );
 
     // Get sender info
     const senderInfo = await query(
-      `SELECT "FullName", "ProfileImageURL" FROM "User" WHERE "UserID" = $1::uuid`,
+      `SELECT "FullName", "ProfileImageURL" FROM "User" WHERE "UserID" = $1`,
       [userId]
     );
 
@@ -297,7 +297,7 @@ export const deleteMessage = asyncHandler(async (req: Request, res: Response) =>
     const { messageId } = req.params;
 
     const messageCheck = await query(
-      `SELECT * FROM "Message" WHERE "MessageID" = $1::uuid`,
+      `SELECT * FROM "Message" WHERE "MessageID" = $1`,
       [messageId]
     );
 
@@ -315,7 +315,7 @@ export const deleteMessage = asyncHandler(async (req: Request, res: Response) =>
       await query(
         `UPDATE "Message" 
          SET "IsDeleted" = true, "UpdatedAt" = NOW()
-         WHERE "MessageID" = $1::uuid`,
+         WHERE "MessageID" = $1`,
         [messageId]
       );
     } else {
@@ -326,7 +326,7 @@ export const deleteMessage = asyncHandler(async (req: Request, res: Response) =>
         await query(
           `UPDATE "Message" 
            SET "DeletedFor" = $1, "UpdatedAt" = NOW()
-           WHERE "MessageID" = $2::uuid`,
+           WHERE "MessageID" = $2`,
           [deletedFor, messageId]
         );
       }
@@ -354,8 +354,8 @@ export const getUnreadCount = asyncHandler(async (req: Request, res: Response) =
       `SELECT COUNT(*) as unread_count
        FROM "Message" m
        JOIN "Conversation" c ON m."ConversationID" = c."ConversationID"
-       WHERE (c."Participant1ID" = $1::uuid OR c."Participant2ID" = $1::uuid)
-         AND m."SenderID" != $1::uuid 
+       WHERE (c."Participant1ID" = $1 OR c."Participant2ID" = $1)
+         AND m."SenderID" != $1 
          AND m."IsRead" = false
          AND m."IsDeleted" = false`,
       [userId]
@@ -393,7 +393,7 @@ export const searchUsers = asyncHandler(async (req: Request, res: Response) => {
     const result = await query(
       `SELECT "UserID", "FullName", "Email", "ProfileImageURL", "Role", "IsOnline"
        FROM "User" 
-       WHERE "UserID" != $1::uuid 
+       WHERE "UserID" != $1 
          AND ("FullName" ILIKE $2 OR "Email" ILIKE $2)
          AND "Status" = 'Active'
        LIMIT $3`,
