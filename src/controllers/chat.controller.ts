@@ -11,37 +11,174 @@ const getQueryNumber = (param: any, defaultValue: number): number => {
   return isNaN(num) ? defaultValue : num;
 };
 
-// Get messages for a session (chat history)
+// Get or create a conversation between two users
+export const getOrCreateConversation = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const currentUserId = (req as any).user?.UserID;
+    const { otherUserId } = req.params;
+
+    if (!otherUserId) {
+      return res.status(400).json({
+        success: false,
+        errors: [formatError("otherUserId", "Other user ID is required")],
+      });
+    }
+
+    // Check if other user exists
+    const userCheck = await query(
+      `SELECT "UserID", "FullName", "ProfileImageURL", "Role", "Status", "IsOnline"
+       FROM "User" WHERE "UserID" = $1`,
+      [otherUserId]
+    );
+
+    if (userCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        errors: [formatError("user", "User not found")],
+      });
+    }
+
+    // Check if conversation exists
+    let conversation = await query(
+      `SELECT * FROM "Conversation" 
+       WHERE (Participant1ID = $1 AND Participant2ID = $2) 
+          OR (Participant1ID = $2 AND Participant2ID = $1)`,
+      [currentUserId, otherUserId]
+    );
+
+    if (conversation.rows.length === 0) {
+      // Create new conversation
+      const result = await query(
+        `INSERT INTO "Conversation" 
+         ("ConversationID", "Participant1ID", "Participant2ID", "CreatedAt", "UpdatedAt")
+         VALUES (gen_random_uuid(), $1, $2, NOW(), NOW())
+         RETURNING *`,
+        [currentUserId, otherUserId]
+      );
+      conversation = result;
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        conversation: conversation.rows[0],
+        otherUser: {
+          UserID: userCheck.rows[0].UserID,
+          FullName: userCheck.rows[0].FullName,
+          ProfileImageURL: userCheck.rows[0].ProfileImageURL,
+          Role: userCheck.rows[0].Role,
+          IsOnline: userCheck.rows[0].IsOnline || false,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("[Chat] Get conversation error:", error);
+    return res.status(500).json({
+      success: false,
+      errors: [formatError("server", "Failed to get conversation")],
+    });
+  }
+});
+
+// Get all conversations for current user
+export const getConversations = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.UserID;
+    const page = getQueryNumber(req.query.page, 1);
+    const limit = getQueryNumber(req.query.limit, 20);
+    const offset = (page - 1) * limit;
+
+    const result = await query(
+      `SELECT c.*,
+              CASE 
+                WHEN c.Participant1ID = $1 THEN u2."FullName" 
+                ELSE u1."FullName" 
+              END as "otherUserName",
+              CASE 
+                WHEN c.Participant1ID = $1 THEN u2."ProfileImageURL" 
+                ELSE u1."ProfileImageURL" 
+              END as "otherUserImage",
+              CASE 
+                WHEN c.Participant1ID = $1 THEN u2."UserID" 
+                ELSE u1."UserID" 
+              END as "otherUserId",
+              CASE 
+                WHEN c.Participant1ID = $1 THEN u2."IsOnline" 
+                ELSE u1."IsOnline" 
+              END as "otherUserOnline",
+              COALESCE(c."LastMessage", '') as "lastMessage",
+              c."LastMessageAt",
+              COUNT(CASE WHEN m."IsRead" = false AND m."SenderID" != $1 AND m."IsDeleted" = false THEN 1 END) as "unreadCount"
+       FROM "Conversation" c
+       JOIN "User" u1 ON c.Participant1ID = u1."UserID"
+       JOIN "User" u2 ON c.Participant2ID = u2."UserID"
+       LEFT JOIN "Message" m ON c."ConversationID" = m."ConversationID"
+       WHERE c.Participant1ID = $1 OR c.Participant2ID = $1
+       GROUP BY c."ConversationID", u1."UserID", u2."UserID", u1."FullName", u2."FullName",
+                u1."ProfileImageURL", u2."ProfileImageURL", u1."IsOnline", u2."IsOnline"
+       ORDER BY c."LastMessageAt" DESC NULLS LAST
+       LIMIT $2 OFFSET $3`,
+      [userId, limit, offset]
+    );
+
+    // Get total count
+    const countResult = await query(
+      `SELECT COUNT(*) FROM "Conversation" 
+       WHERE Participant1ID = $1 OR Participant2ID = $1`,
+      [userId]
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        conversations: result.rows,
+        pagination: {
+          page,
+          limit,
+          total,
+          pages: Math.ceil(total / limit),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("[Chat] Get conversations error:", error);
+    return res.status(500).json({
+      success: false,
+      errors: [formatError("server", "Failed to get conversations")],
+    });
+  }
+});
+
+// Get messages for a conversation
 export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
-    const { sessionId } = req.params;
+    const { conversationId } = req.params;
     const limit = getQueryNumber(req.query.limit, 50);
     const before = req.query.before as string;
 
-    // Check if user is part of the session
-    const sessionCheck = await query(
-      `SELECT * FROM "Session" 
-       WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
-      [sessionId, userId]
+    // Check if user is part of conversation
+    const convCheck = await query(
+      `SELECT * FROM "Conversation" 
+       WHERE "ConversationID" = $1 AND (Participant1ID = $2 OR Participant2ID = $2)`,
+      [conversationId, userId]
     );
 
-    if (sessionCheck.rows.length === 0) {
+    if (convCheck.rows.length === 0) {
       return res.status(403).json({
         success: false,
-        errors: [formatError("authorization", "You are not part of this session")],
+        errors: [formatError("authorization", "You are not part of this conversation")],
       });
     }
 
     let queryText = `
-      SELECT m.*, 
-             u."FullName" as "SenderName", 
-             u."ProfileImageURL" as "SenderImage"
+      SELECT m.*, u."FullName" as "SenderName", u."ProfileImageURL" as "SenderImage"
       FROM "Message" m
       JOIN "User" u ON m."SenderID" = u."UserID"
-      WHERE m."SessionID" = $1
+      WHERE m."ConversationID" = $1 AND m."IsDeleted" = false
     `;
-    const params: any[] = [sessionId];
+    const params: any[] = [conversationId];
     let paramCount = 1;
 
     if (before) {
@@ -54,16 +191,14 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
     params.push(limit);
 
     const result = await query(queryText, params);
-    
-    // Reverse to show oldest first
     const messages = result.rows.reverse();
 
-    // Mark messages as read (for messages sent by other user)
+    // Mark messages as read
     await query(
       `UPDATE "Message" 
-       SET "ReadAt" = NOW()
-       WHERE "SessionID" = $1 AND "SenderID" != $2 AND "ReadAt" IS NULL`,
-      [sessionId, userId]
+       SET "IsRead" = true, "ReadAt" = NOW()
+       WHERE "ConversationID" = $1 AND "SenderID" != $2 AND "IsRead" = false`,
+      [conversationId, userId]
     );
 
     return res.status(200).json({
@@ -74,16 +209,16 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
     console.error("[Chat] Get messages error:", error);
     return res.status(500).json({
       success: false,
-      errors: [formatError("server", "Failed to fetch messages")],
+      errors: [formatError("server", "Failed to get messages")],
     });
   }
 });
 
-// Send a message (REST fallback, but WebSocket is preferred)
+// Send a message (REST fallback)
 export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
-    const { sessionId } = req.params;
+    const { conversationId } = req.params;
     const { content, messageType = 'TEXT', replyToId } = req.body;
 
     if (!content || !content.trim()) {
@@ -93,49 +228,48 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
       });
     }
 
-    // Check if user is part of the session
-    const sessionCheck = await query(
-      `SELECT * FROM "Session" 
-       WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
-      [sessionId, userId]
+    // Check if user is part of conversation
+    const convCheck = await query(
+      `SELECT c.*, 
+              CASE WHEN c.Participant1ID = $2 THEN c.Participant2ID ELSE c.Participant1ID END as "ReceiverID"
+       FROM "Conversation" c
+       WHERE c."ConversationID" = $1 AND (c.Participant1ID = $2 OR c.Participant2ID = $2)`,
+      [conversationId, userId]
     );
 
-    if (sessionCheck.rows.length === 0) {
+    if (convCheck.rows.length === 0) {
       return res.status(403).json({
         success: false,
-        errors: [formatError("authorization", "You are not part of this session")],
+        errors: [formatError("authorization", "You are not part of this conversation")],
       });
     }
 
-    const session = sessionCheck.rows[0];
+    const conversation = convCheck.rows[0];
+    const receiverId = conversation.receiverid;
 
     // Insert message
     const result = await query(
       `INSERT INTO "Message" 
-       ("MessageID", "SessionID", "SenderID", "Content", "MessageType", "ReplyToID", "CreatedAt", "UpdatedAt")
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NOW(), NOW())
+       ("MessageID", "ConversationID", "SenderID", "ReceiverID", "Content", "MessageType", "ReplyToID", "CreatedAt", "UpdatedAt")
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, NOW(), NOW())
        RETURNING *`,
-      [sessionId, userId, content.trim(), messageType, replyToId || null]
+      [conversationId, userId, receiverId, content.trim(), messageType, replyToId || null]
     );
 
     const message = result.rows[0];
+
+    // Update conversation's last message
+    await query(
+      `UPDATE "Conversation" 
+       SET "LastMessage" = $1, "LastMessageAt" = NOW(), "UpdatedAt" = NOW()
+       WHERE "ConversationID" = $2`,
+      [content.trim().substring(0, 100), conversationId]
+    );
 
     // Get sender info
     const senderInfo = await query(
       `SELECT "FullName", "ProfileImageURL" FROM "User" WHERE "UserID" = $1`,
       [userId]
-    );
-
-    // Create notification for the other participant
-    const otherUserId = session.MentorID === userId ? session.LearnerID : session.MentorID;
-    
-    await query(
-      `INSERT INTO "Notification" 
-       ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
-       VALUES (gen_random_uuid(), $1, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
-      [otherUserId, "New Message", 
-       `${senderInfo.rows[0].FullName} sent a message: ${content.substring(0, 50)}...`,
-       JSON.stringify({ sessionId, messageId: message.MessageID })]
     );
 
     return res.status(201).json({
@@ -155,67 +289,46 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
   }
 });
 
-// Edit a message
-export const editMessage = asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user?.UserID;
-    const { messageId } = req.params;
-    const { content } = req.body;
-
-    if (!content || !content.trim()) {
-      return res.status(400).json({
-        success: false,
-        errors: [formatError("content", "Message content is required")],
-      });
-    }
-
-    const result = await query(
-      `UPDATE "Message" 
-       SET "Content" = $1, "IsEdited" = true, "EditedAt" = NOW(), "UpdatedAt" = NOW()
-       WHERE "MessageID" = $2 AND "SenderID" = $3
-       RETURNING *`,
-      [content.trim(), messageId, userId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        errors: [formatError("message", "Message not found or you can't edit it")],
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: result.rows[0],
-      message: "Message edited successfully",
-    });
-  } catch (error) {
-    console.error("[Chat] Edit message error:", error);
-    return res.status(500).json({
-      success: false,
-      errors: [formatError("server", "Failed to edit message")],
-    });
-  }
-});
-
-// Delete a message
+// Delete message (soft delete for user)
 export const deleteMessage = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
     const { messageId } = req.params;
 
-    const result = await query(
-      `DELETE FROM "Message" 
-       WHERE "MessageID" = $1 AND "SenderID" = $2
-       RETURNING "SessionID"`,
-      [messageId, userId]
+    const messageCheck = await query(
+      `SELECT * FROM "Message" WHERE "MessageID" = $1`,
+      [messageId]
     );
 
-    if (result.rows.length === 0) {
+    if (messageCheck.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        errors: [formatError("message", "Message not found or you can't delete it")],
+        errors: [formatError("message", "Message not found")],
       });
+    }
+
+    const message = messageCheck.rows[0];
+
+    // If sender deletes
+    if (message.SenderID === userId) {
+      await query(
+        `UPDATE "Message" 
+         SET "IsDeleted" = true, "UpdatedAt" = NOW()
+         WHERE "MessageID" = $1`,
+        [messageId]
+      );
+    } else {
+      // If receiver deletes, add to DeletedFor array
+      let deletedFor = message.DeletedFor || [];
+      if (!deletedFor.includes(userId)) {
+        deletedFor.push(userId);
+        await query(
+          `UPDATE "Message" 
+           SET "DeletedFor" = $1, "UpdatedAt" = NOW()
+           WHERE "MessageID" = $2`,
+          [deletedFor, messageId]
+        );
+      }
     }
 
     return res.status(200).json({
@@ -231,79 +344,20 @@ export const deleteMessage = asyncHandler(async (req: Request, res: Response) =>
   }
 });
 
-// Mark a message as read
-export const markMessageRead = asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user?.UserID;
-    const { messageId } = req.params;
-
-    const result = await query(
-      `UPDATE "Message" 
-       SET "ReadAt" = NOW()
-       WHERE "MessageID" = $1 AND "SenderID" != $2 AND "ReadAt" IS NULL
-       RETURNING *`,
-      [messageId, userId]
-    );
-
-    return res.status(200).json({
-      success: true,
-      data: result.rows[0],
-      message: "Message marked as read",
-    });
-  } catch (error) {
-    console.error("[Chat] Mark message read error:", error);
-    return res.status(500).json({
-      success: false,
-      errors: [formatError("server", "Failed to mark message as read")],
-    });
-  }
-});
-
-// Mark all messages in a session as read
-export const markAllMessagesRead = asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user?.UserID;
-    const { sessionId } = req.params;
-
-    const result = await query(
-      `UPDATE "Message" 
-       SET "ReadAt" = NOW()
-       WHERE "SessionID" = $1 AND "SenderID" != $2 AND "ReadAt" IS NULL
-       RETURNING "MessageID"`,
-      [sessionId, userId]
-    );
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        updatedCount: result.rows.length,
-      },
-      message: `${result.rows.length} messages marked as read`,
-    });
-  } catch (error) {
-    console.error("[Chat] Mark all messages read error:", error);
-    return res.status(500).json({
-      success: false,
-      errors: [formatError("server", "Failed to mark messages as read")],
-    });
-  }
-});
-
-// Get unread message count for a session
+// Get total unread count
 export const getUnreadCount = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
-    const { sessionId } = req.params;
 
     const result = await query(
       `SELECT COUNT(*) as unread_count
        FROM "Message" m
-       JOIN "Session" s ON m."SessionID" = s."SessionID"
-       WHERE m."SessionID" = $1 
-         AND m."SenderID" != $2 
-         AND m."ReadAt" IS NULL
-         AND (s."MentorID" = $2 OR s."LearnerID" = $2)`,
-      [sessionId, userId]
+       JOIN "Conversation" c ON m."ConversationID" = c."ConversationID"
+       WHERE (c.Participant1ID = $1 OR c.Participant2ID = $1)
+         AND m."SenderID" != $1 
+         AND m."IsRead" = false
+         AND m."IsDeleted" = false`,
+      [userId]
     );
 
     return res.status(200).json({
@@ -321,32 +375,39 @@ export const getUnreadCount = asyncHandler(async (req: Request, res: Response) =
   }
 });
 
-// Get total unread messages across all sessions
-export const getTotalUnreadMessages = asyncHandler(async (req: Request, res: Response) => {
+// Search users to start a new chat
+export const searchUsers = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
+    const { q } = req.query;
+    const limit = getQueryNumber(req.query.limit, 20);
+
+    if (!q) {
+      return res.status(400).json({
+        success: false,
+        errors: [formatError("search", "Search query is required")],
+      });
+    }
 
     const result = await query(
-      `SELECT COUNT(*) as total_unread
-       FROM "Message" m
-       JOIN "Session" s ON m."SessionID" = s."SessionID"
-       WHERE m."SenderID" != $1 
-         AND m."ReadAt" IS NULL
-         AND (s."MentorID" = $1 OR s."LearnerID" = $1)`,
-      [userId]
+      `SELECT "UserID", "FullName", "Email", "ProfileImageURL", "Role", "IsOnline"
+       FROM "User" 
+       WHERE "UserID" != $1 
+         AND ("FullName" ILIKE $2 OR "Email" ILIKE $2)
+         AND "Status" = 'Active'
+       LIMIT $3`,
+      [userId, `%${q}%`, limit]
     );
 
     return res.status(200).json({
       success: true,
-      data: {
-        totalUnread: parseInt(result.rows[0].total_unread),
-      },
+      data: result.rows,
     });
   } catch (error) {
-    console.error("[Chat] Get total unread error:", error);
+    console.error("[Chat] Search users error:", error);
     return res.status(500).json({
       success: false,
-      errors: [formatError("server", "Failed to get total unread count")],
+      errors: [formatError("server", "Failed to search users")],
     });
   }
 });

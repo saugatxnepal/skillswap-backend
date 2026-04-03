@@ -87,6 +87,8 @@ model User {
   ProfileImageURL      String?
   Timezone             String?    @default("UTC")
   NotificationPreferences Json?   @default("{\"email\": true, \"inApp\": true}")
+  IsOnline             Boolean    @default(false)
+  LastSeen             DateTime?  @default(now())
   CreatedAt            DateTime   @default(now())
   UpdatedAt            DateTime   @default(now()) @updatedAt
   PasswordResetToken   String?
@@ -97,6 +99,7 @@ model User {
   learnerSessions      Session[]   @relation("LearnerSessions")
   mentorSessions       Session[]   @relation("MentorSessions")
   sentMessages         Message[]   @relation("SentMessages")
+  receivedMessages     Message[]   @relation("ReceivedMessages")
   availability         Availability[] @relation("UserAvailability")
   mentorReviews        Review[]    @relation("MentorReviews")
   learnerReviews       Review[]    @relation("LearnerReviews")
@@ -113,6 +116,10 @@ model User {
   sessionInvitesReceived SessionInvite[] @relation("Invitee")
   sessionQuestions     SessionQuestion[]
   meetingRecordings    MeetingRecording[]
+  
+  // Chat relations
+  conversations1       Conversation[] @relation("Participant1")
+  conversations2       Conversation[] @relation("Participant2")
 }
 
 model Skill {
@@ -286,25 +293,55 @@ model SessionInvite {
 }
 
 model Message {
-  MessageID     String      @id @default(uuid())
-  SessionID     String
-  Session       Session     @relation("SessionMessages", fields: [SessionID], references: [SessionID])
-  SenderID      String
-  Sender        User        @relation("SentMessages", fields: [SenderID], references: [UserID])
-  Content       String
-  MessageType   MessageType @default(TEXT)
-  FileURL       String?
-  FileName      String?
-  FileSize      Int?
-  ReadAt        DateTime?
-  IsEdited      Boolean     @default(false)
-  EditedAt      DateTime?
-  ReplyToID     String?     // MessageID being replied to
-  CreatedAt     DateTime    @default(now())
-  UpdatedAt     DateTime    @updatedAt
+  MessageID      String      @id @default(uuid())
+  SessionID      String?     // Optional - for session-specific messages
+  ConversationID String?     // For DM conversations
+  SenderID       String
+  ReceiverID     String?     // For direct messages
+  Content        String
+  MessageType    MessageType @default(TEXT)
+  FileURL        String?
+  FileName       String?
+  FileSize       Int?
+  IsRead         Boolean     @default(false)
+  ReadAt         DateTime?
+  IsEdited       Boolean     @default(false)
+  EditedAt       DateTime?
+  IsDeleted      Boolean     @default(false)
+  DeletedFor     String[]    // Users who soft-deleted this message
+  ReplyToID      String?
+  CreatedAt      DateTime    @default(now())
+  UpdatedAt      DateTime    @updatedAt
+  
+  // Relations
+  session        Session?    @relation("SessionMessages", fields: [SessionID], references: [SessionID])
+  conversation   Conversation? @relation(fields: [ConversationID], references: [ConversationID])
+  sender         User        @relation("SentMessages", fields: [SenderID], references: [UserID])
+  receiver       User?       @relation("ReceivedMessages", fields: [ReceiverID], references: [UserID])
   
   @@index([SessionID, CreatedAt])
+  @@index([ConversationID, CreatedAt])
   @@index([SenderID])
+  @@index([ReceiverID])
+}
+
+model Conversation {
+  ConversationID String      @id @default(uuid())
+  Participant1ID String
+  Participant2ID String
+  LastMessage    String?
+  LastMessageAt  DateTime?
+  CreatedAt      DateTime    @default(now())
+  UpdatedAt      DateTime    @updatedAt
+  
+  // Relations
+  participant1   User        @relation("Participant1", fields: [Participant1ID], references: [UserID])
+  participant2   User        @relation("Participant2", fields: [Participant2ID], references: [UserID])
+  messages       Message[]
+  
+  @@unique([Participant1ID, Participant2ID])
+  @@index([Participant1ID, Participant2ID])
+  @@index([LastMessageAt])
 }
 
 model SessionQuestion {

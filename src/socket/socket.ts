@@ -9,11 +9,20 @@ interface SocketUser {
   userId: string;
   role: string;
   fullName: string;
+  profileImage?: string;
   socketId: string;
 }
 
 // Store online users
 const onlineUsers = new Map<string, SocketUser>();
+
+// Helper to get user socket
+const getUserSocket = (userId: string): Socket | undefined => {
+  const user = onlineUsers.get(userId);
+  if (!user) return undefined;
+  // This needs to be implemented with socket reference storage
+  return undefined;
+};
 
 export const setupSocket = (server: HttpServer) => {
   const io = new SocketServer(server, {
@@ -22,6 +31,9 @@ export const setupSocket = (server: HttpServer) => {
       credentials: true,
     },
   });
+
+  // Store socket references
+  const socketRefs = new Map<string, Socket>();
 
   // Authentication middleware
   io.use(async (socket, next) => {
@@ -34,7 +46,8 @@ export const setupSocket = (server: HttpServer) => {
       const decoded = jwt.verify(token, JWT_SECRET) as any;
       
       const userResult = await query(
-        `SELECT "UserID", "Role", "FullName" FROM "User" WHERE "UserID" = $1 AND "Status" = 'Active'`,
+        `SELECT "UserID", "Role", "FullName", "ProfileImageURL" 
+         FROM "User" WHERE "UserID" = $1 AND "Status" = 'Active'`,
         [decoded.id]
       );
 
@@ -47,6 +60,7 @@ export const setupSocket = (server: HttpServer) => {
         userId: user.UserID,
         role: user.Role,
         fullName: user.FullName,
+        profileImage: user.ProfileImageURL,
       };
       
       next();
@@ -59,11 +73,21 @@ export const setupSocket = (server: HttpServer) => {
     const user = socket.data.user;
     console.log(`[Socket] User connected: ${user.fullName} (${user.userId})`);
 
+    // Store socket reference
+    socketRefs.set(user.userId, socket);
+
+    // Update user online status in database
+    query(
+      `UPDATE "User" SET "IsOnline" = true, "LastSeen" = NOW() WHERE "UserID" = $1`,
+      [user.userId]
+    ).catch(console.error);
+
     // Store user as online
     onlineUsers.set(user.userId, {
       userId: user.userId,
       role: user.role,
       fullName: user.fullName,
+      profileImage: user.profileImage,
       socketId: socket.id,
     });
 
@@ -74,9 +98,10 @@ export const setupSocket = (server: HttpServer) => {
       role: user.role,
     });
 
+    // ==================== SESSION CHAT (Legacy - Keep for backward compatibility) ====================
+
     // Join session room
     socket.on('session:join', async (sessionId: string) => {
-      // Check if user is part of the session
       const sessionCheck = await query(
         `SELECT * FROM "Session" 
          WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
@@ -87,7 +112,6 @@ export const setupSocket = (server: HttpServer) => {
         socket.join(`session:${sessionId}`);
         console.log(`[Socket] User ${user.fullName} joined session ${sessionId}`);
         
-        // Notify others in the session
         socket.to(`session:${sessionId}`).emit('session:user-joined', {
           userId: user.userId,
           fullName: user.fullName,
@@ -99,20 +123,17 @@ export const setupSocket = (server: HttpServer) => {
     // Leave session room
     socket.on('session:leave', (sessionId: string) => {
       socket.leave(`session:${sessionId}`);
-      console.log(`[Socket] User ${user.fullName} left session ${sessionId}`);
-      
       socket.to(`session:${sessionId}`).emit('session:user-left', {
         userId: user.userId,
         fullName: user.fullName,
       });
     });
 
-    // Send message
+    // Session message send
     socket.on('message:send', async (data) => {
       const { sessionId, content, messageType = 'TEXT', fileUrl, fileName, replyToId } = data;
       
       try {
-        // Verify user is part of the session
         const sessionCheck = await query(
           `SELECT * FROM "Session" 
            WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
@@ -126,32 +147,28 @@ export const setupSocket = (server: HttpServer) => {
 
         const session = sessionCheck.rows[0];
         
-        // Insert message into database
         const result = await query(
           `INSERT INTO "Message" 
            ("MessageID", "SessionID", "SenderID", "Content", "MessageType", 
-            "FileURL", "FileName", "ReplyToID", "CreatedAt")
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW())
+            "FileURL", "FileName", "ReplyToID", "CreatedAt", "UpdatedAt")
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
            RETURNING *`,
           [sessionId, user.userId, content, messageType, fileUrl || null, fileName || null, replyToId || null]
         );
 
         const message = result.rows[0];
         
-        // Add sender info to message
         const messageWithSender = {
           ...message,
           senderName: user.fullName,
           senderRole: user.role,
+          senderImage: user.profileImage,
         };
 
-        // Broadcast to everyone in the session room
         io.to(`session:${sessionId}`).emit('message:new', messageWithSender);
 
-        // Notify the other participant (for push notification)
         const otherUserId = session.MentorID === user.userId ? session.LearnerID : session.MentorID;
         
-        // Create notification for offline user
         await query(
           `INSERT INTO "Notification" 
            ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
@@ -167,7 +184,169 @@ export const setupSocket = (server: HttpServer) => {
       }
     });
 
-    // Mark message as read
+    // ==================== DIRECT MESSAGING (NEW SOCIAL MEDIA STYLE) ====================
+
+    // Send DM message
+    socket.on('chat:send', async (data) => {
+      const { conversationId, content, messageType = 'TEXT', replyToId } = data;
+      
+      try {
+        // Get conversation details
+        const convResult = await query(
+          `SELECT c.*, 
+                  CASE WHEN c.Participant1ID = $2 THEN c.Participant2ID ELSE c.Participant1ID END as "ReceiverID"
+           FROM "Conversation" c
+           WHERE c."ConversationID" = $1`,
+          [conversationId, user.userId]
+        );
+        
+        if (convResult.rows.length === 0) {
+          socket.emit('chat:error', { error: 'Conversation not found' });
+          return;
+        }
+        
+        const conversation = convResult.rows[0];
+        const receiverId = conversation.receiverid;
+        
+        // Insert message
+        const result = await query(
+          `INSERT INTO "Message" 
+           ("MessageID", "ConversationID", "SenderID", "ReceiverID", "Content", "MessageType", 
+            "ReplyToID", "IsRead", "CreatedAt", "UpdatedAt")
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, false, NOW(), NOW())
+           RETURNING *`,
+          [conversationId, user.userId, receiverId, content, messageType, replyToId || null]
+        );
+        
+        const message = result.rows[0];
+        
+        // Update conversation
+        await query(
+          `UPDATE "Conversation" 
+           SET "LastMessage" = $1, "LastMessageAt" = NOW(), "UpdatedAt" = NOW()
+           WHERE "ConversationID" = $2`,
+          [content.substring(0, 100), conversationId]
+        );
+        
+        // Get sender info
+        const senderInfo = {
+          MessageID: message.MessageID,
+          ConversationID: message.ConversationID,
+          SenderID: message.SenderID,
+          Content: message.Content,
+          MessageType: message.MessageType,
+          CreatedAt: message.CreatedAt,
+          senderName: user.fullName,
+          senderImage: user.profileImage,
+        };
+        
+        // Send to recipient if online
+        const recipientSocket = socketRefs.get(receiverId);
+        if (recipientSocket) {
+          recipientSocket.emit('chat:new', senderInfo);
+        }
+        
+        // Send back to sender
+        socket.emit('chat:sent', senderInfo);
+        
+        // Create notification for offline user
+        await query(
+          `INSERT INTO "Notification" 
+           ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
+           VALUES (gen_random_uuid(), $1, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
+          [receiverId, "New Message", 
+           `${user.fullName} sent you a message: ${content.substring(0, 50)}...`,
+           JSON.stringify({ conversationId, messageId: message.MessageID })]
+        );
+        
+      } catch (error) {
+        console.error('[Socket] Chat send error:', error);
+        socket.emit('chat:error', { error: 'Failed to send message' });
+      }
+    });
+
+    // Typing indicator for DM
+    socket.on('chat:typing:start', async ({ conversationId }) => {
+      const convResult = await query(
+        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
+        [conversationId]
+      );
+      
+      if (convResult.rows.length === 0) return;
+      
+      const conversation = convResult.rows[0];
+      const otherUserId = conversation.Participant1ID === user.userId 
+        ? conversation.Participant2ID 
+        : conversation.Participant1ID;
+      
+      const recipientSocket = socketRefs.get(otherUserId);
+      if (recipientSocket) {
+        recipientSocket.emit('chat:typing', {
+          userId: user.userId,
+          fullName: user.fullName,
+          isTyping: true,
+        });
+      }
+    });
+
+    socket.on('chat:typing:stop', async ({ conversationId }) => {
+      const convResult = await query(
+        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
+        [conversationId]
+      );
+      
+      if (convResult.rows.length === 0) return;
+      
+      const conversation = convResult.rows[0];
+      const otherUserId = conversation.Participant1ID === user.userId 
+        ? conversation.Participant2ID 
+        : conversation.Participant1ID;
+      
+      const recipientSocket = socketRefs.get(otherUserId);
+      if (recipientSocket) {
+        recipientSocket.emit('chat:typing', {
+          userId: user.userId,
+          fullName: user.fullName,
+          isTyping: false,
+        });
+      }
+    });
+
+    // Mark messages as read in DM
+    socket.on('chat:read', async ({ conversationId, messageIds }) => {
+      await query(
+        `UPDATE "Message" 
+         SET "IsRead" = true, "ReadAt" = NOW()
+         WHERE "MessageID" = ANY($1::uuid[]) AND "SenderID" != $2`,
+        [messageIds, user.userId]
+      );
+      
+      // Notify sender
+      const convResult = await query(
+        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
+        [conversationId]
+      );
+      
+      if (convResult.rows.length === 0) return;
+      
+      const conversation = convResult.rows[0];
+      const otherUserId = conversation.Participant1ID === user.userId 
+        ? conversation.Participant2ID 
+        : conversation.Participant1ID;
+      
+      const recipientSocket = socketRefs.get(otherUserId);
+      if (recipientSocket) {
+        recipientSocket.emit('chat:read-receipt', { 
+          messageIds, 
+          readBy: user.userId,
+          readAt: new Date().toISOString()
+        });
+      }
+    });
+
+    // ==================== COMMON EVENTS ====================
+
+    // Mark session message as read
     socket.on('message:read', async (data: { sessionId: string, messageIds: string[] }) => {
       const { sessionId, messageIds } = data;
       
@@ -191,7 +370,7 @@ export const setupSocket = (server: HttpServer) => {
       }
     });
 
-    // Typing indicator
+    // Typing indicator for session
     socket.on('typing:start', (data: { sessionId: string }) => {
       socket.to(`session:${data.sessionId}`).emit('typing:indicator', {
         userId: user.userId,
@@ -217,17 +396,45 @@ export const setupSocket = (server: HttpServer) => {
           `UPDATE "Message" 
            SET "Content" = $1, "IsEdited" = true, "EditedAt" = NOW()
            WHERE "MessageID" = $2 AND "SenderID" = $3
-           RETURNING "SessionID"`,
+           RETURNING "SessionID", "ConversationID"`,
           [content, messageId, user.userId]
         );
 
         if (result.rows.length > 0) {
-          const sessionId = result.rows[0].SessionID;
-          io.to(`session:${sessionId}`).emit('message:edited', {
-            messageId,
-            content,
-            editedAt: new Date().toISOString(),
-          });
+          const { SessionID, ConversationID } = result.rows[0];
+          if (SessionID) {
+            io.to(`session:${SessionID}`).emit('message:edited', {
+              messageId,
+              content,
+              editedAt: new Date().toISOString(),
+            });
+          } else if (ConversationID) {
+            // Get conversation participants
+            const convResult = await query(
+              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
+              [ConversationID]
+            );
+            if (convResult.rows.length > 0) {
+              const conversation = convResult.rows[0];
+              const otherUserId = conversation.Participant1ID === user.userId 
+                ? conversation.Participant2ID 
+                : conversation.Participant1ID;
+              
+              const recipientSocket = socketRefs.get(otherUserId);
+              if (recipientSocket) {
+                recipientSocket.emit('chat:message-edited', {
+                  messageId,
+                  content,
+                  editedAt: new Date().toISOString(),
+                });
+              }
+              socket.emit('chat:message-edited', {
+                messageId,
+                content,
+                editedAt: new Date().toISOString(),
+              });
+            }
+          }
         }
       } catch (error) {
         console.error('[Socket] Edit message error:', error);
@@ -240,15 +447,35 @@ export const setupSocket = (server: HttpServer) => {
       
       try {
         const result = await query(
-          `DELETE FROM "Message" 
+          `UPDATE "Message" 
+           SET "IsDeleted" = true, "UpdatedAt" = NOW()
            WHERE "MessageID" = $1 AND "SenderID" = $2
-           RETURNING "SessionID"`,
+           RETURNING "SessionID", "ConversationID"`,
           [messageId, user.userId]
         );
 
         if (result.rows.length > 0) {
-          const sessionId = result.rows[0].SessionID;
-          io.to(`session:${sessionId}`).emit('message:deleted', { messageId });
+          const { SessionID, ConversationID } = result.rows[0];
+          if (SessionID) {
+            io.to(`session:${SessionID}`).emit('message:deleted', { messageId });
+          } else if (ConversationID) {
+            const convResult = await query(
+              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
+              [ConversationID]
+            );
+            if (convResult.rows.length > 0) {
+              const conversation = convResult.rows[0];
+              const otherUserId = conversation.Participant1ID === user.userId 
+                ? conversation.Participant2ID 
+                : conversation.Participant1ID;
+              
+              const recipientSocket = socketRefs.get(otherUserId);
+              if (recipientSocket) {
+                recipientSocket.emit('chat:message-deleted', { messageId });
+              }
+              socket.emit('chat:message-deleted', { messageId });
+            }
+          }
         }
       } catch (error) {
         console.error('[Socket] Delete message error:', error);
@@ -273,9 +500,18 @@ export const setupSocket = (server: HttpServer) => {
     });
 
     // Disconnect
-    socket.on('disconnect', () => {
+    socket.on('disconnect', async () => {
       console.log(`[Socket] User disconnected: ${user.fullName}`);
+      
+      // Remove from online users
       onlineUsers.delete(user.userId);
+      socketRefs.delete(user.userId);
+      
+      // Update user offline status in database
+      await query(
+        `UPDATE "User" SET "IsOnline" = false, "LastSeen" = NOW() WHERE "UserID" = $1`,
+        [user.userId]
+      ).catch(console.error);
       
       // Broadcast user offline status
       io.emit('user:offline', {

@@ -2,14 +2,13 @@
 import { Router } from "express";
 import { authenticateJWT } from "../middlewares/auth.middleware";
 import {
+  getOrCreateConversation,
+  getConversations,
   getMessages,
   sendMessage,
-  editMessage,
   deleteMessage,
-  markMessageRead,
-  markAllMessagesRead,
   getUnreadCount,
-  getTotalUnreadMessages,
+  searchUsers,
 } from "../controllers/chat.controller";
 
 const router = Router();
@@ -17,18 +16,19 @@ const router = Router();
 // All chat routes require authentication
 router.use(authenticateJWT);
 
+// User search
+router.get("/search", searchUsers);
+
+// Conversations
+router.get("/conversations", getConversations);
+router.get("/conversations/:otherUserId", getOrCreateConversation);
+
 // Messages
-router.get("/sessions/:sessionId/messages", getMessages);
-router.post("/sessions/:sessionId/messages", sendMessage);
-
-// Unread counts
-router.get("/sessions/:sessionId/unread", getUnreadCount);
-router.get("/unread/total", getTotalUnreadMessages);
-
-// Message actions
-router.patch("/messages/:messageId", editMessage);
+router.get("/conversations/:conversationId/messages", getMessages);
+router.post("/conversations/:conversationId/messages", sendMessage);
 router.delete("/messages/:messageId", deleteMessage);
-router.patch("/messages/:messageId/read", markMessageRead);
-router.post("/sessions/:sessionId/mark-read", markAllMessagesRead);
+
+// Unread count
+router.get("/unread", getUnreadCount);
 
 export default router;
