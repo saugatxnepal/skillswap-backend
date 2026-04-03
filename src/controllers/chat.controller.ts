@@ -4,14 +4,12 @@ import { asyncHandler } from "../middlewares/asyncHandler";
 import { formatError } from "../utils/formatError";
 import { query } from "../db";
 
-// Helper functions
 const getQueryNumber = (param: any, defaultValue: number): number => {
   if (!param) return defaultValue;
   const num = parseInt(param, 10);
   return isNaN(num) ? defaultValue : num;
 };
 
-// Get or create a conversation between two users
 export const getOrCreateConversation = asyncHandler(async (req: Request, res: Response) => {
   try {
     const currentUserId = (req as any).user?.UserID;
@@ -24,7 +22,6 @@ export const getOrCreateConversation = asyncHandler(async (req: Request, res: Re
       });
     }
 
-    // Check if other user exists - use text comparison since UserID is text
     const userCheck = await query(
       `SELECT "UserID", "FullName", "ProfileImageURL", "Role", "Status", "IsOnline"
        FROM "User" WHERE "UserID" = $1`,
@@ -38,7 +35,6 @@ export const getOrCreateConversation = asyncHandler(async (req: Request, res: Re
       });
     }
 
-    // Check if conversation exists - use text comparison
     let conversation = await query(
       `SELECT * FROM "Conversation" 
        WHERE ("Participant1ID" = $1 AND "Participant2ID" = $2) 
@@ -47,7 +43,6 @@ export const getOrCreateConversation = asyncHandler(async (req: Request, res: Re
     );
 
     if (conversation.rows.length === 0) {
-      // Create new conversation
       const result = await query(
         `INSERT INTO "Conversation" 
          ("ConversationID", "Participant1ID", "Participant2ID", "CreatedAt", "UpdatedAt")
@@ -80,7 +75,6 @@ export const getOrCreateConversation = asyncHandler(async (req: Request, res: Re
   }
 });
 
-// Get all conversations for current user
 export const getConversations = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -121,7 +115,6 @@ export const getConversations = asyncHandler(async (req: Request, res: Response)
       [userId, limit, offset]
     );
 
-    // Get total count
     const countResult = await query(
       `SELECT COUNT(*) FROM "Conversation" 
        WHERE "Participant1ID" = $1 OR "Participant2ID" = $1`,
@@ -150,7 +143,6 @@ export const getConversations = asyncHandler(async (req: Request, res: Response)
   }
 });
 
-// Get messages for a conversation
 export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -158,7 +150,6 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
     const limit = getQueryNumber(req.query.limit, 50);
     const before = req.query.before as string;
 
-    // Check if user is part of conversation
     const convCheck = await query(
       `SELECT * FROM "Conversation" 
        WHERE "ConversationID" = $1 AND ("Participant1ID" = $2 OR "Participant2ID" = $2)`,
@@ -193,7 +184,6 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
     const result = await query(queryText, params);
     const messages = result.rows.reverse();
 
-    // Mark messages as read
     await query(
       `UPDATE "Message" 
        SET "IsRead" = true, "ReadAt" = NOW()
@@ -214,7 +204,7 @@ export const getMessages = asyncHandler(async (req: Request, res: Response) => {
   }
 });
 
-// Send a message (REST fallback)
+// Send a message (REST fallback) - FIXED
 export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -250,9 +240,8 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
     // Insert message
     const result = await query(
       `INSERT INTO "Message" 
-       ("MessageID", "ConversationID", "SenderID", "ReceiverID", "Content", "MessageType", 
-        "ReplyToID", "IsRead", "CreatedAt", "UpdatedAt")
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, false, NOW(), NOW())
+       ("MessageID", "ConversationID", "SenderID", "ReceiverID", "Content", "MessageType", "ReplyToID", "CreatedAt", "UpdatedAt")
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, NOW(), NOW())
        RETURNING *`,
       [conversationId, userId, receiverId, content.trim(), messageType, replyToId || null]
     );
@@ -290,7 +279,7 @@ export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
   }
 });
 
-// Delete message (soft delete for user)
+// Delete message (soft delete for user) - FIXED
 export const deleteMessage = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -345,7 +334,7 @@ export const deleteMessage = asyncHandler(async (req: Request, res: Response) =>
   }
 });
 
-// Get total unread count
+// Get total unread count - FIXED
 export const getUnreadCount = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
@@ -383,7 +372,7 @@ export const searchUsers = asyncHandler(async (req: Request, res: Response) => {
     const { q } = req.query;
     const limit = getQueryNumber(req.query.limit, 20);
 
-    if (!q || typeof q !== 'string') {
+    if (!q) {
       return res.status(400).json({
         success: false,
         errors: [formatError("search", "Search query is required")],

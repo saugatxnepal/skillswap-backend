@@ -37,9 +37,10 @@ export const setupSocket = (server: HttpServer) => {
 
       const decoded = jwt.verify(token, JWT_SECRET) as any;
       
+      // REMOVED ::uuid casting - use direct comparison
       const userResult = await query(
         `SELECT "UserID", "Role", "FullName", "ProfileImageURL" 
-         FROM "User" WHERE "UserID" = $1::uuid AND "Status" = 'Active'`,
+         FROM "User" WHERE "UserID" = $1 AND "Status" = 'Active'`,
         [decoded.id]
       );
 
@@ -69,9 +70,9 @@ export const setupSocket = (server: HttpServer) => {
     // Store socket reference
     socketRefs.set(user.userId, socket);
 
-    // Update user online status in database
+    // Update user online status in database - REMOVED ::uuid
     query(
-      `UPDATE "User" SET "IsOnline" = true, "LastSeen" = NOW() WHERE "UserID" = $1::uuid`,
+      `UPDATE "User" SET "IsOnline" = true, "LastSeen" = NOW() WHERE "UserID" = $1`,
       [user.userId]
     ).catch(console.error);
 
@@ -91,19 +92,33 @@ export const setupSocket = (server: HttpServer) => {
       role: user.role,
     });
 
-    // ==================== DIRECT MESSAGING (SOCIAL MEDIA STYLE) ====================
+    // ==================== CONVERSATION ROOM MANAGEMENT ====================
+    
+    // Join conversation room for DM
+    socket.on('conversation:join', (conversationId: string) => {
+      socket.join(`conversation:${conversationId}`);
+      console.log(`[Socket] User ${user.fullName} joined conversation ${conversationId}`);
+    });
+
+    // Leave conversation room
+    socket.on('conversation:leave', (conversationId: string) => {
+      socket.leave(`conversation:${conversationId}`);
+      console.log(`[Socket] User ${user.fullName} left conversation ${conversationId}`);
+    });
+
+    // ==================== DIRECT MESSAGING ====================
 
     // Send DM message
     socket.on('chat:send', async (data) => {
       const { conversationId, content, messageType = 'TEXT', replyToId } = data;
       
       try {
-        // Get conversation details with proper UUID casting
+        // Get conversation details - REMOVED ::uuid
         const convResult = await query(
           `SELECT c.*, 
-                  CASE WHEN c."Participant1ID" = $2::uuid THEN c."Participant2ID" ELSE c."Participant1ID" END as "ReceiverID"
+                  CASE WHEN c."Participant1ID" = $2 THEN c."Participant2ID" ELSE c."Participant1ID" END as "ReceiverID"
            FROM "Conversation" c
-           WHERE c."ConversationID" = $1::uuid`,
+           WHERE c."ConversationID" = $1`,
           [conversationId, user.userId]
         );
         
@@ -115,23 +130,23 @@ export const setupSocket = (server: HttpServer) => {
         const conversation = convResult.rows[0];
         const receiverId = conversation.receiverid;
         
-        // Insert message
+        // Insert message - REMOVED ::uuid
         const result = await query(
           `INSERT INTO "Message" 
            ("MessageID", "ConversationID", "SenderID", "ReceiverID", "Content", "MessageType", 
             "ReplyToID", "IsRead", "CreatedAt", "UpdatedAt")
-           VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3::uuid, $4, $5, $6, false, NOW(), NOW())
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, false, NOW(), NOW())
            RETURNING *`,
           [conversationId, user.userId, receiverId, content, messageType, replyToId || null]
         );
         
         const message = result.rows[0];
         
-        // Update conversation
+        // Update conversation - REMOVED ::uuid
         await query(
           `UPDATE "Conversation" 
            SET "LastMessage" = $1, "LastMessageAt" = NOW(), "UpdatedAt" = NOW()
-           WHERE "ConversationID" = $2::uuid`,
+           WHERE "ConversationID" = $2`,
           [content.substring(0, 100), conversationId]
         );
         
@@ -147,20 +162,14 @@ export const setupSocket = (server: HttpServer) => {
           senderImage: user.profileImage,
         };
         
-        // Send to recipient if online
-        const recipientSocket = socketRefs.get(receiverId);
-        if (recipientSocket && recipientSocket.connected) {
-          recipientSocket.emit('chat:new', senderInfo);
-        }
-        
-        // Send back to sender
-        socket.emit('chat:sent', senderInfo);
+        // Broadcast to everyone in the conversation room (including sender)
+        io.to(`conversation:${conversationId}`).emit('chat:new', senderInfo);
         
         // Create notification for offline user
         await query(
           `INSERT INTO "Notification" 
            ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
-           VALUES (gen_random_uuid(), $1::uuid, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
+           VALUES (gen_random_uuid(), $1, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
           [receiverId, "New Message", 
            `${user.fullName} sent you a message: ${content.substring(0, 50)}...`,
            JSON.stringify({ conversationId, messageId: message.MessageID })]
@@ -175,7 +184,7 @@ export const setupSocket = (server: HttpServer) => {
     // Typing indicator for DM
     socket.on('chat:typing:start', async ({ conversationId }) => {
       const convResult = await query(
-        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
+        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
         [conversationId]
       );
       
@@ -198,7 +207,7 @@ export const setupSocket = (server: HttpServer) => {
 
     socket.on('chat:typing:stop', async ({ conversationId }) => {
       const convResult = await query(
-        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
+        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
         [conversationId]
       );
       
@@ -226,13 +235,13 @@ export const setupSocket = (server: HttpServer) => {
       await query(
         `UPDATE "Message" 
          SET "IsRead" = true, "ReadAt" = NOW()
-         WHERE "MessageID" = ANY($1::uuid[]) AND "SenderID" != $2::uuid`,
+         WHERE "MessageID" = ANY($1::text[]) AND "SenderID" != $2`,
         [messageIds, user.userId]
       );
       
       // Notify sender
       const convResult = await query(
-        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
+        `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
         [conversationId]
       );
       
@@ -259,7 +268,7 @@ export const setupSocket = (server: HttpServer) => {
     socket.on('session:join', async (sessionId: string) => {
       const sessionCheck = await query(
         `SELECT * FROM "Session" 
-         WHERE "SessionID" = $1::uuid AND ("MentorID" = $2::uuid OR "LearnerID" = $2::uuid)`,
+         WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
         [sessionId, user.userId]
       );
 
@@ -291,7 +300,7 @@ export const setupSocket = (server: HttpServer) => {
       try {
         const sessionCheck = await query(
           `SELECT * FROM "Session" 
-           WHERE "SessionID" = $1::uuid AND ("MentorID" = $2::uuid OR "LearnerID" = $2::uuid)`,
+           WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
           [sessionId, user.userId]
         );
 
@@ -306,7 +315,7 @@ export const setupSocket = (server: HttpServer) => {
           `INSERT INTO "Message" 
            ("MessageID", "SessionID", "SenderID", "Content", "MessageType", 
             "FileURL", "FileName", "ReplyToID", "CreatedAt", "UpdatedAt")
-           VALUES (gen_random_uuid(), $1::uuid, $2::uuid, $3, $4, $5, $6, $7, NOW(), NOW())
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
            RETURNING *`,
           [sessionId, user.userId, content, messageType, fileUrl || null, fileName || null, replyToId || null]
         );
@@ -327,7 +336,7 @@ export const setupSocket = (server: HttpServer) => {
         await query(
           `INSERT INTO "Notification" 
            ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
-           VALUES (gen_random_uuid(), $1::uuid, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
+           VALUES (gen_random_uuid(), $1, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
           [otherUserId, "New Message", 
            `${user.fullName} sent a message: ${content.substring(0, 50)}...`,
            JSON.stringify({ sessionId, messageId: message.MessageID })]
@@ -347,9 +356,9 @@ export const setupSocket = (server: HttpServer) => {
         await query(
           `UPDATE "Message" 
            SET "ReadAt" = NOW()
-           WHERE "MessageID" = ANY($1::uuid[]) 
-             AND "SessionID" = $2::uuid 
-             AND "SenderID" != $3::uuid`,
+           WHERE "MessageID" = ANY($1::text[]) 
+             AND "SessionID" = $2 
+             AND "SenderID" != $3`,
           [messageIds, sessionId, user.userId]
         );
         
@@ -388,7 +397,7 @@ export const setupSocket = (server: HttpServer) => {
         const result = await query(
           `UPDATE "Message" 
            SET "Content" = $1, "IsEdited" = true, "EditedAt" = NOW()
-           WHERE "MessageID" = $2::uuid AND "SenderID" = $3::uuid
+           WHERE "MessageID" = $2 AND "SenderID" = $3
            RETURNING "SessionID", "ConversationID"`,
           [content, messageId, user.userId]
         );
@@ -403,7 +412,7 @@ export const setupSocket = (server: HttpServer) => {
             });
           } else if (ConversationID) {
             const convResult = await query(
-              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
+              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
               [ConversationID]
             );
             if (convResult.rows.length > 0) {
@@ -441,7 +450,7 @@ export const setupSocket = (server: HttpServer) => {
         const result = await query(
           `UPDATE "Message" 
            SET "IsDeleted" = true, "UpdatedAt" = NOW()
-           WHERE "MessageID" = $1::uuid AND "SenderID" = $2::uuid
+           WHERE "MessageID" = $1 AND "SenderID" = $2
            RETURNING "SessionID", "ConversationID"`,
           [messageId, user.userId]
         );
@@ -452,7 +461,7 @@ export const setupSocket = (server: HttpServer) => {
             io.to(`session:${SessionID}`).emit('message:deleted', { messageId });
           } else if (ConversationID) {
             const convResult = await query(
-              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1::uuid`,
+              `SELECT * FROM "Conversation" WHERE "ConversationID" = $1`,
               [ConversationID]
             );
             if (convResult.rows.length > 0) {
@@ -499,9 +508,9 @@ export const setupSocket = (server: HttpServer) => {
       onlineUsers.delete(user.userId);
       socketRefs.delete(user.userId);
       
-      // Update user offline status in database
+      // Update user offline status in database - REMOVED ::uuid
       await query(
-        `UPDATE "User" SET "IsOnline" = false, "LastSeen" = NOW() WHERE "UserID" = $1::uuid`,
+        `UPDATE "User" SET "IsOnline" = false, "LastSeen" = NOW() WHERE "UserID" = $1`,
         [user.userId]
       ).catch(console.error);
       
