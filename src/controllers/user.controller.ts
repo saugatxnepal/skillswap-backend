@@ -96,9 +96,9 @@ export const updateCurrentUserProfile = asyncHandler(
   async (req: Request, res: Response) => {
     try {
       const currentUserId = (req as any).user?.UserID;
-      
-      const { fullName, bio, timezone, notificationPreferences } = req.body;
-      
+
+      const { fullName, bio } = req.body;
+
       let profileImageURL = undefined;
       if (req.file) {
         profileImageURL = `/uploads/profiles/${req.file.filename}`;
@@ -139,22 +139,11 @@ export const updateCurrentUserProfile = asyncHandler(
         values.push(bio || null);
       }
 
-      if (timezone !== undefined) {
-        paramCount++;
-        updates.push(`"Timezone" = $${paramCount}`);
-        values.push(timezone || 'UTC');
-      }
-
-      if (notificationPreferences !== undefined) {
-        paramCount++;
-        updates.push(`"NotificationPreferences" = $${paramCount}`);
-        values.push(notificationPreferences);
-      }
-
       if (profileImageURL !== undefined) {
         paramCount++;
         updates.push(`"ProfileImageURL" = $${paramCount}`);
         values.push(profileImageURL);
+
         await deleteOldProfileImage(existingUser.rows[0].ProfileImageURL);
       }
 
@@ -174,7 +163,7 @@ export const updateCurrentUserProfile = asyncHandler(
         SET ${updates.join(', ')}
         WHERE "UserID" = $${paramCount}
         RETURNING "UserID", "FullName", "Email", "Role", "Status", "Bio", 
-                  "ProfileImageURL", "Timezone", "NotificationPreferences", "CreatedAt"
+                  "ProfileImageURL", "CreatedAt"
       `;
 
       const updateResult = await query(updateQuery, values);
