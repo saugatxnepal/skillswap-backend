@@ -13,15 +13,11 @@ import {
   getUserStats,
 } from "../controllers/user.controller";
 
-import { createUploader } from "../middlewares/uploadHandler";
+import { flexibleUpload, singleFileUpload } from "../middlewares/uploadHandler";
 import { Role } from "../constants/roles";
 import { authenticateJWT, authorizeRoles } from "../middlewares/auth.middleware";
 
 const router = Router();
-
-// Create uploader for profile images
-const profileUpload = createUploader("profiles");
-
 
 // ==================== USER ROUTES (AUTH REQUIRED) ====================
 
@@ -32,18 +28,18 @@ router.get(
   getCurrentUserProfile
 );
 
-// UPDATE PROFILE
+// UPDATE PROFILE - Using flexible upload that accepts multiple field names
 router.put(
   "/me",
   authenticateJWT,
-  profileUpload.single("profileImage"),
+  flexibleUpload("profiles", ["profileImage", "image", "photo", "avatar", "file"]),
   updateCurrentUserProfile
 );
 
 router.patch(
   "/me",
   authenticateJWT,
-  profileUpload.single("profileImage"),
+  flexibleUpload("profiles", ["profileImage", "image", "photo", "avatar", "file"]),
   updateCurrentUserProfile
 );
 
@@ -73,7 +69,6 @@ router.patch(
   updateNotificationPreferences
 );
 
-
 // ==================== ADMIN ROUTES ====================
 
 // GET ALL USERS
@@ -99,12 +94,12 @@ router.get(
   getUserById
 );
 
-// UPDATE USER BY ID
+// UPDATE USER BY ID - Using flexible upload
 router.put(
   "/:id",
   authenticateJWT,
   authorizeRoles(Role.Admin),
-  profileUpload.single("profileImage"),
+  flexibleUpload("profiles", ["profileImage", "image", "photo", "avatar", "file"]),
   updateUserProfileById
 );
 
@@ -112,7 +107,7 @@ router.patch(
   "/:id",
   authenticateJWT,
   authorizeRoles(Role.Admin),
-  profileUpload.single("profileImage"),
+  flexibleUpload("profiles", ["profileImage", "image", "photo", "avatar", "file"]),
   updateUserProfileById
 );
 
