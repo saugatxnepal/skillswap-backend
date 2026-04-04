@@ -96,12 +96,14 @@ export const updateCurrentUserProfile = asyncHandler(
   async (req: Request, res: Response) => {
     try {
       const currentUserId = (req as any).user?.UserID;
-
       const { fullName, bio } = req.body;
 
       let profileImageURL = undefined;
+      
+      // Check for uploaded file (now works with any field name)
       if (req.file) {
         profileImageURL = `/uploads/profiles/${req.file.filename}`;
+        console.log('Profile image uploaded:', profileImageURL);
       }
 
       if (!currentUserId) {
@@ -144,13 +146,26 @@ export const updateCurrentUserProfile = asyncHandler(
         updates.push(`"ProfileImageURL" = $${paramCount}`);
         values.push(profileImageURL);
 
-        await deleteOldProfileImage(existingUser.rows[0].ProfileImageURL);
+        // Delete old profile image
+        if (existingUser.rows[0].ProfileImageURL) {
+          await deleteOldProfileImage(existingUser.rows[0].ProfileImageURL);
+        }
       }
 
       if (updates.length === 0) {
-        return res.status(400).json({
-          success: false,
-          errors: [formatError("fields", "No fields to update")],
+        // If no updates, return current user data
+        const currentUser = await query(
+          `SELECT "UserID", "FullName", "Email", "Role", "Status", "Bio", 
+                  "ProfileImageURL", "CreatedAt"
+           FROM "User" 
+           WHERE "UserID" = $1`,
+          [currentUserId],
+        );
+        
+        return res.status(200).json({
+          success: true,
+          data: currentUser.rows[0],
+          message: "No updates provided",
         });
       }
 
