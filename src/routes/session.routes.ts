@@ -1,3 +1,4 @@
+// src/routes/session.routes.ts
 import { Router } from "express";
 import { authenticateJWT } from "../middlewares/auth.middleware";
 import {
@@ -6,20 +7,18 @@ import {
   selectTimeSlot,
   startSession,
   endSession,
+  getSessionMeetingInfo,
 } from "../controllers/session.controller";
 
 const router = Router();
 
-// All session routes require authentication
 router.use(authenticateJWT);
 
-// Time slot management
 router.get("/:sessionId/time-slots", getAvailableTimeSlots);
 router.post("/:sessionId/time-slots", proposeTimeSlots);
 router.post("/:sessionId/time-slots/:timeSlotId/select", selectTimeSlot);
-
-// Session control
 router.post("/:sessionId/start", startSession);
 router.post("/:sessionId/end", endSession);
+router.get("/:sessionId/meeting-info", getSessionMeetingInfo);
 
 export default router;

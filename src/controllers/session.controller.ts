@@ -1,3 +1,4 @@
+// src/controllers/session.controller.ts
 import { Request, Response } from "express";
 import { asyncHandler } from "../middlewares/asyncHandler";
 import { formatError } from "../utils/formatError";
@@ -45,7 +46,7 @@ export const proposeTimeSlots = asyncHandler(async (req: Request, res: Response)
   try {
     const userId = (req as any).user?.UserID;
     const { sessionId } = req.params;
-    const { timeSlots } = req.body; // Array of { startTime, endTime }
+    const { timeSlots } = req.body;
 
     if (!timeSlots || !Array.isArray(timeSlots)) {
       return res.status(400).json({
@@ -54,7 +55,6 @@ export const proposeTimeSlots = asyncHandler(async (req: Request, res: Response)
       });
     }
 
-    // Check if user is part of the session
     const sessionCheck = await query(
       `SELECT * FROM "Session" WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
       [sessionId, userId]
@@ -79,14 +79,13 @@ export const proposeTimeSlots = asyncHandler(async (req: Request, res: Response)
       inserted.push(result.rows[0]);
     }
 
-    // Notify the other participant
     const session = sessionCheck.rows[0];
     const otherUserId = session.MentorID === userId ? session.LearnerID : session.MentorID;
 
     await query(
       `INSERT INTO "Notification" 
-       ("NotificationID", "UserID", "Type", "Title", "Content", "Data")
-       VALUES (gen_random_uuid(), $1, 'NEW_MESSAGE', $2, $3, $4)`,
+       ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
+       VALUES (gen_random_uuid(), $1, 'NEW_MESSAGE', $2, $3, $4, NOW())`,
       [otherUserId, "New Time Slots Proposed", "Time slots have been proposed for your session",
        JSON.stringify({ sessionId, count: inserted.length })]
     );
@@ -105,13 +104,12 @@ export const proposeTimeSlots = asyncHandler(async (req: Request, res: Response)
   }
 });
 
-// Select a time slot
+// Select a time slot - Generates WebRTC room ID (no Google Meet)
 export const selectTimeSlot = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
     const { sessionId, timeSlotId } = req.params;
 
-    // Check if user is part of the session
     const sessionCheck = await query(
       `SELECT * FROM "Session" WHERE "SessionID" = $1 AND ("MentorID" = $2 OR "LearnerID" = $2)`,
       [sessionId, userId]
@@ -124,7 +122,6 @@ export const selectTimeSlot = asyncHandler(async (req: Request, res: Response) =
       });
     }
 
-    // Get the time slot
     const timeSlot = await query(
       `SELECT * FROM "TimeSlot" WHERE "TimeSlotID" = $1 AND "SessionID" = $2`,
       [timeSlotId, sessionId]
@@ -137,7 +134,6 @@ export const selectTimeSlot = asyncHandler(async (req: Request, res: Response) =
       });
     }
 
-    // Mark as selected
     await query(
       `UPDATE "TimeSlot" 
        SET "IsSelected" = true, "SelectedBy" = $1
@@ -145,43 +141,38 @@ export const selectTimeSlot = asyncHandler(async (req: Request, res: Response) =
       [userId, timeSlotId]
     );
 
-    // Get the session
     const session = sessionCheck.rows[0];
     const selectedSlot = timeSlot.rows[0];
 
-    // Update session with scheduled time
-    await query(
-      `UPDATE "Session" 
-       SET "ScheduledStart" = $1, "ScheduledEnd" = $2, "Status" = 'SCHEDULED', "UpdatedAt" = NOW()
-       WHERE "SessionID" = $3`,
-      [selectedSlot.StartTime, selectedSlot.EndTime, sessionId]
-    );
-
-    // Generate meeting link (using Google Meet)
-    const meetingRoomId = uuidv4();
-    const meetingLink = `https://meet.google.com/${meetingRoomId.substring(0, 10)}`;
+    // Generate unique WebRTC room ID (no Google Meet)
+    const roomId = uuidv4();
 
     await query(
       `UPDATE "Session" 
-       SET "MeetingLink" = $1, "MeetingRoomId" = $2
-       WHERE "SessionID" = $3`,
-      [meetingLink, meetingRoomId, sessionId]
+       SET "ScheduledStart" = $1, 
+           "ScheduledEnd" = $2, 
+           "Status" = 'SCHEDULED', 
+           "MeetingRoomId" = $3,
+           "MeetingProvider" = 'webrtc',
+           "MeetingLink" = NULL,
+           "UpdatedAt" = NOW()
+       WHERE "SessionID" = $4`,
+      [selectedSlot.StartTime, selectedSlot.EndTime, roomId, sessionId]
     );
 
-    // Notify both participants
     const otherUserId = session.MentorID === userId ? session.LearnerID : session.MentorID;
 
     await query(
       `INSERT INTO "Notification" 
-       ("NotificationID", "UserID", "Type", "Title", "Content", "Data")
+       ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
        VALUES 
-       (gen_random_uuid(), $1, 'SESSION_SCHEDULED', $2, $3, $4),
-       (gen_random_uuid(), $5, 'SESSION_SCHEDULED', $6, $7, $8)`,
+       (gen_random_uuid(), $1, 'SESSION_SCHEDULED', $2, $3, $4, NOW()),
+       (gen_random_uuid(), $5, 'SESSION_SCHEDULED', $6, $7, $8, NOW())`,
       [
         userId, "Session Scheduled", `Your session is scheduled for ${selectedSlot.StartTime}`, 
-        JSON.stringify({ sessionId, meetingLink }),
+        JSON.stringify({ sessionId, roomId }),
         otherUserId, "Session Scheduled", `Your session is scheduled for ${selectedSlot.StartTime}`,
-        JSON.stringify({ sessionId, meetingLink })
+        JSON.stringify({ sessionId, roomId })
       ]
     );
 
@@ -190,7 +181,7 @@ export const selectTimeSlot = asyncHandler(async (req: Request, res: Response) =
       data: {
         scheduledStart: selectedSlot.StartTime,
         scheduledEnd: selectedSlot.EndTime,
-        meetingLink,
+        roomId,
       },
       message: "Time slot selected and session scheduled",
     });
@@ -203,13 +194,12 @@ export const selectTimeSlot = asyncHandler(async (req: Request, res: Response) =
   }
 });
 
-// Start session (generate meeting link)
+// Start session (update status only - WebRTC handled by frontend)
 export const startSession = asyncHandler(async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.UserID;
     const { sessionId } = req.params;
 
-    // Check if user is mentor of this session
     const sessionCheck = await query(
       `SELECT * FROM "Session" WHERE "SessionID" = $1 AND "MentorID" = $2`,
       [sessionId, userId]
@@ -231,7 +221,6 @@ export const startSession = asyncHandler(async (req: Request, res: Response) => 
       });
     }
 
-    // Update session status
     await query(
       `UPDATE "Session" 
        SET "Status" = 'IN_PROGRESS', "ActualStartTime" = NOW(), "UpdatedAt" = NOW()
@@ -242,27 +231,25 @@ export const startSession = asyncHandler(async (req: Request, res: Response) => 
     // Add participants
     await query(
       `INSERT INTO "SessionParticipant" 
-       ("ParticipantID", "SessionID", "UserID", "Role", "JoinedAt")
+       ("ParticipantID", "SessionID", "UserID", "Role", "JoinedAt", "CreatedAt")
        VALUES 
-       (gen_random_uuid(), $1, $2, 'mentor', NOW()),
-       (gen_random_uuid(), $1, $3, 'learner', NOW())`,
+       (gen_random_uuid(), $1, $2, 'mentor', NOW(), NOW()),
+       (gen_random_uuid(), $1, $3, 'learner', NOW(), NOW())`,
       [sessionId, session.MentorID, session.LearnerID]
     );
 
-    // Notify learner
     await query(
       `INSERT INTO "Notification" 
-       ("NotificationID", "UserID", "Type", "Title", "Content", "Data")
-       VALUES (gen_random_uuid(), $1, 'SESSION_REMINDER', $2, $3, $4)`,
+       ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
+       VALUES (gen_random_uuid(), $1, 'SESSION_REMINDER', $2, $3, $4, NOW())`,
       [session.LearnerID, "Session Started", `Your session has started. Join now!`,
-       JSON.stringify({ sessionId, meetingLink: session.MeetingLink })]
+       JSON.stringify({ sessionId, roomId: session.MeetingRoomId })]
     );
 
     return res.status(200).json({
       success: true,
       data: {
-        meetingLink: session.MeetingLink,
-        meetingRoomId: session.MeetingRoomId,
+        roomId: session.MeetingRoomId,
       },
       message: "Session started",
     });
@@ -281,7 +268,6 @@ export const endSession = asyncHandler(async (req: Request, res: Response) => {
     const userId = (req as any).user?.UserID;
     const { sessionId } = req.params;
 
-    // Check if user is mentor of this session
     const sessionCheck = await query(
       `SELECT * FROM "Session" WHERE "SessionID" = $1 AND "MentorID" = $2`,
       [sessionId, userId]
@@ -294,7 +280,6 @@ export const endSession = asyncHandler(async (req: Request, res: Response) => {
       });
     }
 
-    // Update session
     const result = await query(
       `UPDATE "Session" 
        SET "Status" = 'COMPLETED', "ActualEndTime" = NOW(), 
@@ -307,7 +292,6 @@ export const endSession = asyncHandler(async (req: Request, res: Response) => {
 
     const session = result.rows[0];
 
-    // Update participants
     await query(
       `UPDATE "SessionParticipant" 
        SET "LeftAt" = NOW(), "IsActive" = false
@@ -315,12 +299,11 @@ export const endSession = asyncHandler(async (req: Request, res: Response) => {
       [sessionId]
     );
 
-    // Notify learner
     await query(
       `INSERT INTO "Notification" 
-       ("NotificationID", "UserID", "Type", "Title", "Content", "Data")
-       VALUES (gen_random_uuid(), $1, 'SESSION_COMPLETED', $2, $3, $4)`,
-      [session.LearnerID, "Session Completed", `Your session with ${(req as any).user?.FullName} has ended. Please leave a review!`,
+       ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
+       VALUES (gen_random_uuid(), $1, 'SESSION_COMPLETED', $2, $3, $4, NOW())`,
+      [session.LearnerID, "Session Completed", `Your session with ${(req as any).user?.fullName} has ended. Please leave a review!`,
        JSON.stringify({ sessionId })]
     );
 
@@ -334,6 +317,43 @@ export const endSession = asyncHandler(async (req: Request, res: Response) => {
     return res.status(500).json({
       success: false,
       errors: [formatError("server", "Failed to end session")],
+    });
+  }
+});
+
+// Get session meeting info (for WebRTC)
+export const getSessionMeetingInfo = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.UserID;
+    const { sessionId } = req.params;
+
+    const result = await query(
+      `SELECT s."SessionID", s."MeetingRoomId", s."Status", s."ScheduledStart", s."ScheduledEnd",
+              m."FullName" as "mentorName", m."UserID" as "mentorId",
+              l."FullName" as "learnerName", l."UserID" as "learnerId"
+       FROM "Session" s
+       JOIN "User" m ON s."MentorID" = m."UserID"
+       JOIN "User" l ON s."LearnerID" = l."UserID"
+       WHERE s."SessionID" = $1 AND (s."MentorID" = $2 OR s."LearnerID" = $2)`,
+      [sessionId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        errors: [formatError("session", "Session not found")],
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Get session meeting info error:", error);
+    return res.status(500).json({
+      success: false,
+      errors: [formatError("server", "Failed to get meeting info")],
     });
   }
 });

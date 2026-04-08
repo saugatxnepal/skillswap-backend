@@ -14,6 +14,7 @@ import sessionQuestionRoutes from "./routes/sessionQuestion.routes";
 import sessionInviteRoutes from "./routes/sessionInvite.routes";
 import adminDashboardRoutes from "./routes/adminDashboard.routes";
 import chatRoutes from "./routes/chat.routes";
+import webrtcRoutes from "./routes/webrtc.routes";
 import websocketRoutes from "./routes/websocket.routes"; // Add this
 import { FRONTEND_URL } from "./config/env";
 import { errorHandler } from "./middlewares/errorHandler";
@@ -56,6 +57,7 @@ app.use("/api/session-invites", sessionInviteRoutes);
 app.use("/api/admin", adminDashboardRoutes);
 app.use("/api/websocket", websocketRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/webrtc", webrtcRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {
