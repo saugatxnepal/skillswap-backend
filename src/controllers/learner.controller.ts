@@ -1,4 +1,3 @@
-// src/controllers/learner.controller.ts
 import { Request, Response } from "express";
 import { asyncHandler } from "../middlewares/asyncHandler";
 import { formatError } from "../utils/formatError";
@@ -19,6 +18,13 @@ enum SessionStatus {
   REPORTED = "REPORTED",
 }
 
+enum InviteStatus {
+  PENDING = "PENDING",
+  ACCEPTED = "ACCEPTED",
+  DECLINED = "DECLINED",
+  EXPIRED = "EXPIRED",
+}
+
 // Helper functions
 const getQueryString = (param: any): string | undefined => {
   if (typeof param === 'string') return param;
@@ -33,276 +39,94 @@ const getQueryNumber = (param: any, defaultValue: number): number => {
   return isNaN(num) ? defaultValue : num;
 };
 
-// ==================== LEARNER SKILL MANAGEMENT ====================
+// ==================== BROWSE MENTORS ====================
 
-// Add skill that learner wants to learn
-export const addLearnerSkill = asyncHandler(async (req: Request, res: Response) => {
+// Get all mentors with their skills and ratings
+export const getAllMentors = asyncHandler(async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).user?.UserID;
-    const { skillId, experienceLevel } = req.body;
+    const {
+      skillId,
+      categoryId,
+      search,
+      page = 1,
+      limit = 10,
+      sortBy = "rating" // rating, experience, name
+    } = req.query;
 
-    if (!skillId) {
-      return res.status(400).json({
-        success: false,
-        errors: [formatError("skillId", "Skill ID is required")],
-      });
-    }
+    const offset = (Number(page) - 1) * Number(limit);
+    const params: any[] = [];
+    let paramCount = 0;
 
-    // Check if user is learner
-    const userResult = await query(
-      `SELECT "Role" FROM "User" WHERE "UserID" = $1`,
-      [userId]
-    );
-
-    if (userResult.rows[0]?.Role !== Role.Learner && userResult.rows[0]?.Role !== Role.Admin) {
-      return res.status(403).json({
-        success: false,
-        errors: [formatError("role", "Only learners can add learning skills")],
-      });
-    }
-
-    // Check if skill exists
-    const skillCheck = await query(
-      `SELECT * FROM "Skill" WHERE "SkillID" = $1 AND "IsAvailable" = true`,
-      [skillId]
-    );
-
-    if (skillCheck.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        errors: [formatError("skill", "Skill not found or not available")],
-      });
-    }
-
-    // Check if already exists
-    const existing = await query(
-      `SELECT * FROM "UserSkill" WHERE "UserID" = $1 AND "SkillID" = $2`,
-      [userId, skillId]
-    );
-
-    if (existing.rows.length > 0) {
-      // Update existing
-      const result = await query(
-        `UPDATE "UserSkill" 
-         SET "IsLearner" = true, 
-             "ExperienceLevel" = COALESCE($3, "ExperienceLevel"),
-             "UpdatedAt" = NOW()
-         WHERE "UserID" = $1 AND "SkillID" = $2
-         RETURNING *`,
-        [userId, skillId, experienceLevel]
-      );
-      return res.status(200).json({
-        success: true,
-        data: result.rows[0],
-        message: "Learning skill updated",
-      });
-    }
-
-    // Insert new
-    const result = await query(
-      `INSERT INTO "UserSkill" 
-       ("UserSkillID", "UserID", "SkillID", "IsLearner", "IsMentor", "ExperienceLevel", "CreatedAt", "UpdatedAt")
-       VALUES (gen_random_uuid(), $1, $2, true, false, $3, NOW(), NOW())
-       RETURNING *`,
-      [userId, skillId, experienceLevel || null]
-    );
-
-    return res.status(201).json({
-      success: true,
-      data: result.rows[0],
-      message: "Learning skill added successfully",
-    });
-  } catch (error) {
-    console.error("Add learner skill error:", error);
-    return res.status(500).json({
-      success: false,
-      errors: [formatError("server", "Internal server error: " + (error as Error).message)],
-    });
-  }
-});
-
-// Get learner's learning skills
-export const getMyLearningSkills = asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user?.UserID;
-
-    const result = await query(
-      `SELECT s.*, us."ExperienceLevel", us."CreatedAt" as "AddedAt", 
-              sc."Name" as "CategoryName", sc."SkillCategoryID" as "CategoryId"
-       FROM "Skill" s
-       JOIN "UserSkill" us ON s."SkillID" = us."SkillID"
-       LEFT JOIN "SkillCategory" sc ON s."SkillCategoryID" = sc."SkillCategoryID"
-       WHERE us."UserID" = $1 AND us."IsLearner" = true
-       ORDER BY sc."DisplayOrder", s."Name"`,
-      [userId]
-    );
-
-    return res.status(200).json({
-      success: true,
-      data: result.rows,
-    });
-  } catch (error) {
-    console.error("Get my learning skills error:", error);
-    return res.status(500).json({
-      success: false,
-      errors: [formatError("server", "Failed to fetch learning skills")],
-    });
-  }
-});
-
-// Remove learner skill
-export const removeLearnerSkill = asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user?.UserID;
-    const { skillId } = req.params;
-
-    await query(
-      `UPDATE "UserSkill" 
-       SET "IsLearner" = false, "UpdatedAt" = NOW()
-       WHERE "UserID" = $1 AND "SkillID" = $2`,
-      [userId, skillId]
-    );
-
-    return res.status(200).json({
-      success: true,
-      message: "Learning skill removed successfully",
-    });
-  } catch (error) {
-    console.error("Remove learner skill error:", error);
-    return res.status(500).json({
-      success: false,
-      errors: [formatError("server", "Failed to remove learning skill")],
-    });
-  }
-});
-
-// ==================== SKILL-BASED MENTOR MATCHING ====================
-
-// Get matched mentors based on learner's skills
-export const getMatchedMentors = asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user?.UserID;
-    const page = getQueryNumber(req.query.page, 1);
-    const limit = getQueryNumber(req.query.limit, 10);
-    const offset = (page - 1) * limit;
-    const skillId = getQueryString(req.query.skillId);
-    const minMatchPercentage = getQueryNumber(req.query.minMatchPercentage, 0);
-    const sortBy = getQueryString(req.query.sortBy) || "match"; // match, rating, experience
-
-    // Get learner's skills
-    const learnerSkills = await query(
-      `SELECT "SkillID" FROM "UserSkill" 
-       WHERE "UserID" = $1 AND "IsLearner" = true`,
-      [userId]
-    );
-
-    if (learnerSkills.rows.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          mentors: [],
-          message: "Please add skills you want to learn first",
-          pagination: { page, limit, total: 0, pages: 0 }
-        },
-      });
-    }
-
-    const learnerSkillIds = learnerSkills.rows.map(s => s.SkillID);
-
-    // Build query to find mentors who teach learner's skills
     let queryText = `
-      WITH mentor_skills AS (
-        SELECT 
-          u."UserID",
-          u."FullName",
-          u."Bio",
-          u."ProfileImageURL",
-          u."CreatedAt",
-          u."IsOnline",
-          COALESCE(AVG(r."Rating"), 0) as "avgRating",
-          COUNT(DISTINCT r."ReviewID") as "totalReviews",
-          COUNT(DISTINCT us."SkillID") as "totalSkills",
-          array_agg(DISTINCT us."SkillID") as "skillIds",
-          array_agg(DISTINCT s."Name") as "skillNames"
-        FROM "User" u
-        JOIN "UserSkill" us ON u."UserID" = us."UserID" AND us."IsMentor" = true
-        JOIN "Skill" s ON us."SkillID" = s."SkillID" AND s."IsAvailable" = true
-        LEFT JOIN "Review" r ON u."UserID" = r."RevieweeID" AND r."IsMentorReview" = true
-        WHERE u."Role" = 'Mentor' AND u."Status" = 'Active'
-        GROUP BY u."UserID"
-      )
-      SELECT 
-        ms.*,
-        (
-          SELECT COUNT(*) 
-          FROM unnest(ms."skillIds") AS skill_id 
-          WHERE skill_id = ANY($1::text[])
-        ) as "matchedSkillsCount",
-        ROUND(
-          (SELECT COUNT(*) 
-           FROM unnest(ms."skillIds") AS skill_id 
-           WHERE skill_id = ANY($1::text[]))::numeric / NULLIF(array_length(ms."skillIds", 1), 0) * 100, 
-          2
-        ) as "matchPercentage"
-      FROM mentor_skills ms
-      WHERE (SELECT COUNT(*) 
-             FROM unnest(ms."skillIds") AS skill_id 
-             WHERE skill_id = ANY($1::text[])) > 0
+      SELECT DISTINCT 
+        u."UserID", u."FullName", u."Bio", u."ProfileImageURL", 
+        u."CreatedAt",
+        COALESCE(AVG(r."Rating"), 0) as "avgRating",
+        COUNT(DISTINCT r."ReviewID") as "totalReviews",
+        COUNT(DISTINCT s."SkillID") as "skillCount"
+      FROM "User" u
+      JOIN "UserSkill" us ON u."UserID" = us."UserID" AND us."IsMentor" = true
+      JOIN "Skill" s ON us."SkillID" = s."SkillID" AND s."IsAvailable" = true
+      LEFT JOIN "Review" r ON u."UserID" = r."RevieweeID" AND r."IsMentorReview" = true
+      WHERE u."Role" = 'Mentor' AND u."Status" = 'Active'
     `;
-
-    const params: any[] = [learnerSkillIds];
-    let paramCount = 1;
 
     if (skillId) {
       paramCount++;
-      queryText += ` AND $${paramCount} = ANY(ms."skillIds")`;
+      queryText += ` AND s."SkillID" = $${paramCount}`;
       params.push(skillId);
     }
 
-    if (minMatchPercentage > 0) {
+    if (categoryId) {
       paramCount++;
-      queryText += ` AND (SELECT COUNT(*) 
-                          FROM unnest(ms."skillIds") AS skill_id 
-                          WHERE skill_id = ANY($1::text[]))::numeric / NULLIF(array_length(ms."skillIds", 1), 0) * 100 >= $${paramCount}`;
-      params.push(minMatchPercentage);
+      queryText += ` AND s."SkillCategoryID" = $${paramCount}`;
+      params.push(categoryId);
     }
+
+    if (search) {
+      paramCount++;
+      queryText += ` AND (u."FullName" ILIKE $${paramCount} OR u."Bio" ILIKE $${paramCount})`;
+      params.push(`%${search}%`);
+    }
+
+    queryText += ` GROUP BY u."UserID"`;
 
     // Sorting
     if (sortBy === "rating") {
-      queryText += ` ORDER BY ms."avgRating" DESC, "matchPercentage" DESC`;
+      queryText += ` ORDER BY "avgRating" DESC, "skillCount" DESC`;
     } else if (sortBy === "experience") {
-      queryText += ` ORDER BY ms."CreatedAt" ASC`;
+      queryText += ` ORDER BY u."CreatedAt" ASC`;
     } else {
-      queryText += ` ORDER BY "matchPercentage" DESC, ms."avgRating" DESC, ms."totalSkills" DESC`;
+      queryText += ` ORDER BY u."FullName" ASC`;
     }
 
+    // Get total count
+    const countQuery = `
+      SELECT COUNT(DISTINCT u."UserID") 
+      FROM "User" u
+      JOIN "UserSkill" us ON u."UserID" = us."UserID" AND us."IsMentor" = true
+      JOIN "Skill" s ON us."SkillID" = s."SkillID" AND s."IsAvailable" = true
+      WHERE u."Role" = 'Mentor' AND u."Status" = 'Active'
+    `;
+    const countResult = await query(countQuery, []);
+    const total = parseInt(countResult.rows[0].count);
+
+    // Add pagination
     queryText += ` LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-    params.push(limit, offset);
+    params.push(Number(limit), offset);
 
     const result = await query(queryText, params);
 
-    // Get total count for pagination
-    const countResult = await query(
-      `SELECT COUNT(DISTINCT u."UserID") FROM "User" u
-       JOIN "UserSkill" us ON u."UserID" = us."UserID" AND us."IsMentor" = true
-       WHERE u."Role" = 'Mentor' AND u."Status" = 'Active'
-         AND us."SkillID" = ANY($1::text[])`,
-      [learnerSkillIds]
-    );
-    const total = parseInt(countResult.rows[0].count);
-
-    // Get detailed skills for each mentor
+    // Get skills for each mentor
     const mentors = [];
     for (const mentor of result.rows) {
       const skills = await query(
-        `SELECT s.*, us."ExperienceLevel", us."TeachingStyle",
-                CASE WHEN $1::text[] IS NOT NULL AND s."SkillID" = ANY($1::text[]) 
-                     THEN true ELSE false END as "isMatched"
+        `SELECT s.*, us."ExperienceLevel", us."TeachingStyle"
          FROM "Skill" s
          JOIN "UserSkill" us ON s."SkillID" = us."SkillID"
-         WHERE us."UserID" = $2 AND us."IsMentor" = true AND s."IsAvailable" = true
-         ORDER BY "isMatched" DESC, s."Name"`,
-        [learnerSkillIds, mentor.UserID]
+         WHERE us."UserID" = $1 AND us."IsMentor" = true AND s."IsAvailable" = true
+         ORDER BY s."Name"`,
+        [mentor.UserID]
       );
       mentors.push({ ...mentor, skills: skills.rows });
     }
@@ -311,7 +135,6 @@ export const getMatchedMentors = asyncHandler(async (req: Request, res: Response
       success: true,
       data: {
         mentors,
-        learnerSkills: learnerSkills.rows,
         pagination: {
           page: Number(page),
           limit: Number(limit),
@@ -321,31 +144,21 @@ export const getMatchedMentors = asyncHandler(async (req: Request, res: Response
       },
     });
   } catch (error) {
-    console.error("Get matched mentors error:", error);
+    console.error("Get all mentors error:", error);
     return res.status(500).json({
       success: false,
-      errors: [formatError("server", "Failed to fetch matched mentors")],
+      errors: [formatError("server", "Failed to fetch mentors")],
     });
   }
 });
 
-// Get matched mentor details
-export const getMatchedMentorDetails = asyncHandler(async (req: Request, res: Response) => {
+// Get mentor details by ID
+export const getMentorDetails = asyncHandler(async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).user?.UserID;
     const { mentorId } = req.params;
 
-    // Get learner's skills
-    const learnerSkills = await query(
-      `SELECT "SkillID", "ExperienceLevel" FROM "UserSkill" 
-       WHERE "UserID" = $1 AND "IsLearner" = true`,
-      [userId]
-    );
-    const learnerSkillIds = learnerSkills.rows.map(s => s.SkillID);
-
-    // Get mentor details with match info
     const mentorResult = await query(
-      `SELECT u."UserID", u."FullName", u."Bio", u."ProfileImageURL", u."CreatedAt", u."IsOnline",
+      `SELECT u."UserID", u."FullName", u."Bio", u."ProfileImageURL", u."CreatedAt",
               COALESCE(AVG(r."Rating"), 0) as "avgRating",
               COUNT(DISTINCT r."ReviewID") as "totalReviews"
        FROM "User" u
@@ -364,22 +177,15 @@ export const getMatchedMentorDetails = asyncHandler(async (req: Request, res: Re
 
     const mentor = mentorResult.rows[0];
 
-    // Get mentor's skills with match indication
+    // Get mentor's skills
     const skills = await query(
-      `SELECT s.*, us."ExperienceLevel", us."TeachingStyle", us."CreatedAt" as "AddedAt",
-              CASE WHEN $1::text[] IS NOT NULL AND s."SkillID" = ANY($1::text[]) 
-                   THEN true ELSE false END as "isMatched"
+      `SELECT s.*, us."ExperienceLevel", us."TeachingStyle", us."CreatedAt" as "AddedAt"
        FROM "Skill" s
        JOIN "UserSkill" us ON s."SkillID" = us."SkillID"
-       WHERE us."UserID" = $2 AND us."IsMentor" = true AND s."IsAvailable" = true
-       ORDER BY "isMatched" DESC, s."Name"`,
-      [learnerSkillIds, mentorId]
+       WHERE us."UserID" = $1 AND us."IsMentor" = true AND s."IsAvailable" = true
+       ORDER BY s."Name"`,
+      [mentorId]
     );
-
-    const matchedSkills = skills.rows.filter(s => s.isMatched);
-    const matchPercentage = skills.rows.length > 0 
-      ? Math.round((matchedSkills.length / skills.rows.length) * 100)
-      : 0;
 
     // Get mentor's reviews
     const reviews = await query(
@@ -392,35 +198,16 @@ export const getMatchedMentorDetails = asyncHandler(async (req: Request, res: Re
       [mentorId]
     );
 
-    // Get mentor's availability
-    const availability = await query(
-      `SELECT * FROM "Availability" 
-       WHERE "UserID" = $1 AND "IsActive" = true
-       ORDER BY "DayOfWeek", "StartTime"`,
-      [mentorId]
-    );
-
     return res.status(200).json({
       success: true,
       data: {
         ...mentor,
         skills: skills.rows,
         reviews: reviews.rows,
-        availability: availability.rows,
-        matchInfo: {
-          matchedSkillsCount: matchedSkills.length,
-          totalSkillsCount: skills.rows.length,
-          matchPercentage,
-          matchedSkills: matchedSkills.map(s => ({ 
-            id: s.SkillID, 
-            name: s.Name,
-            mentorExperience: s.ExperienceLevel
-          })),
-        },
       },
     });
   } catch (error) {
-    console.error("Get matched mentor details error:", error);
+    console.error("Get mentor details error:", error);
     return res.status(500).json({
       success: false,
       errors: [formatError("server", "Failed to fetch mentor details")],
@@ -434,7 +221,6 @@ export const getMatchedMentorDetails = asyncHandler(async (req: Request, res: Re
 export const requestSession = asyncHandler(async (req: Request, res: Response) => {
   try {
     const learnerId = (req as any).user?.UserID;
-    const learnerName = (req as any).user?.fullName;
     const { mentorId, skillId, title, description, proposedTimeSlots } = req.body;
 
     if (!mentorId || !skillId || !title) {
@@ -471,25 +257,11 @@ export const requestSession = asyncHandler(async (req: Request, res: Response) =
       });
     }
 
-    // Check if learner wants to learn this skill
-    const learnerSkillCheck = await query(
-      `SELECT * FROM "UserSkill" 
-       WHERE "UserID" = $1 AND "SkillID" = $2 AND "IsLearner" = true`,
-      [learnerId, skillId]
-    );
-
-    if (learnerSkillCheck.rows.length === 0) {
-      return res.status(400).json({
-        success: false,
-        errors: [formatError("skill", "You haven't added this skill to your learning list")],
-      });
-    }
-
     // Create session
     const sessionResult = await query(
       `INSERT INTO "Session" 
-       ("SessionID", "Title", "Description", "LearnerID", "MentorID", "Status", "CreatedAt", "UpdatedAt")
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, 'PENDING_MATCH', NOW(), NOW())
+       ("SessionID", "Title", "Description", "LearnerID", "MentorID", "Status")
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, 'PENDING_MATCH')
        RETURNING *`,
       [title, description || null, learnerId, mentorId]
     );
@@ -498,8 +270,8 @@ export const requestSession = asyncHandler(async (req: Request, res: Response) =
 
     // Link skill to session
     await query(
-      `INSERT INTO "SessionSkill" ("SessionSkillID", "SessionID", "SkillID", "CreatedAt")
-       VALUES (gen_random_uuid(), $1, $2, NOW())`,
+      `INSERT INTO "SessionSkill" ("SessionSkillID", "SessionID", "SkillID")
+       VALUES (gen_random_uuid(), $1, $2)`,
       [session.SessionID, skillId]
     );
 
@@ -508,8 +280,8 @@ export const requestSession = asyncHandler(async (req: Request, res: Response) =
       for (const slot of proposedTimeSlots) {
         await query(
           `INSERT INTO "TimeSlot" 
-           ("TimeSlotID", "SessionID", "UserID", "StartTime", "EndTime", "IsAvailable", "IsSelected", "CreatedAt")
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, true, false, NOW())`,
+           ("TimeSlotID", "SessionID", "UserID", "StartTime", "EndTime", "IsAvailable", "IsSelected")
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, true, false)`,
           [session.SessionID, learnerId, slot.startTime, slot.endTime]
         );
       }
@@ -518,9 +290,9 @@ export const requestSession = asyncHandler(async (req: Request, res: Response) =
     // Create notification for mentor
     await query(
       `INSERT INTO "Notification" 
-       ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
-       VALUES (gen_random_uuid(), $1, 'MENTOR_REQUEST', $2, $3, $4, NOW())`,
-      [mentorId, "New Session Request", `${learnerName} wants to learn from you`,
+       ("NotificationID", "UserID", "Type", "Title", "Content", "Data")
+       VALUES (gen_random_uuid(), $1, 'MENTOR_REQUEST', $2, $3, $4)`,
+      [mentorId, "New Session Request", `${(req as any).user?.FullName} wants to learn from you`,
         JSON.stringify({ sessionId: session.SessionID, skillId })]
     );
 
@@ -646,10 +418,10 @@ export const cancelSession = asyncHandler(async (req: Request, res: Response) =>
     // Notify mentor
     await query(
       `INSERT INTO "Notification" 
-       ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
-       VALUES (gen_random_uuid(), $1, 'SESSION_CANCELLED', $2, $3, $4, NOW())`,
+       ("NotificationID", "UserID", "Type", "Title", "Content", "Data")
+       VALUES (gen_random_uuid(), $1, 'SESSION_CANCELLED', $2, $3, $4)`,
       [session.MentorID, "Session Cancelled", `Learner cancelled the session`,
-        JSON.stringify({ sessionId })]
+      JSON.stringify({ sessionId })]
     );
 
     return res.status(200).json({
@@ -661,59 +433,6 @@ export const cancelSession = asyncHandler(async (req: Request, res: Response) =>
     return res.status(500).json({
       success: false,
       errors: [formatError("server", "Failed to cancel session")],
-    });
-  }
-});
-
-// Get recommended skills (based on popular skills)
-export const getRecommendedSkills = asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user?.UserID;
-    const limit = getQueryNumber(req.query.limit, 10);
-
-    // Get learner's current skills
-    const learnerSkills = await query(
-      `SELECT "SkillID" FROM "UserSkill" WHERE "UserID" = $1 AND "IsLearner" = true`,
-      [userId]
-    );
-    const learnerSkillIds = learnerSkills.rows.map(s => s.SkillID);
-
-    let queryText = `
-      SELECT s.*, sc."Name" as "CategoryName",
-             COUNT(DISTINCT us."UserID") as "mentorCount",
-             COUNT(DISTINCT ss."SessionID") as "sessionCount"
-      FROM "Skill" s
-      LEFT JOIN "SkillCategory" sc ON s."SkillCategoryID" = sc."SkillCategoryID"
-      LEFT JOIN "UserSkill" us ON s."SkillID" = us."SkillID" AND us."IsMentor" = true
-      LEFT JOIN "SessionSkill" ss ON s."SkillID" = ss."SkillID"
-      WHERE s."IsAvailable" = true
-    `;
-
-    if (learnerSkillIds.length > 0) {
-      queryText += ` AND s."SkillID" != ALL($1::text[])`;
-      queryText += ` GROUP BY s."SkillID", sc."Name"
-                     ORDER BY "mentorCount" DESC, "sessionCount" DESC
-                     LIMIT $2`;
-      const result = await query(queryText, [learnerSkillIds, limit]);
-      return res.status(200).json({
-        success: true,
-        data: result.rows,
-      });
-    } else {
-      queryText += ` GROUP BY s."SkillID", sc."Name"
-                     ORDER BY "mentorCount" DESC, "sessionCount" DESC
-                     LIMIT $1`;
-      const result = await query(queryText, [limit]);
-      return res.status(200).json({
-        success: true,
-        data: result.rows,
-      });
-    }
-  } catch (error) {
-    console.error("Get recommended skills error:", error);
-    return res.status(500).json({
-      success: false,
-      errors: [formatError("server", "Failed to fetch recommended skills")],
     });
   }
 });
