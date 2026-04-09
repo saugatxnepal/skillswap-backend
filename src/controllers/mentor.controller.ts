@@ -590,9 +590,12 @@ export const getMentorSessions = asyncHandler(async (req: Request, res: Response
       SELECT s.*, 
              u."FullName" as "LearnerName",
              u."ProfileImageURL" as "LearnerImage",
-             u."Email" as "LearnerEmail"
+             u."Email" as "LearnerEmail",
+             sk."Name" as "SkillName"
       FROM "Session" s
       JOIN "User" u ON s."LearnerID" = u."UserID"
+      LEFT JOIN "SessionSkill" ss ON s."SessionID" = ss."SessionID"
+      LEFT JOIN "Skill" sk ON ss."SkillID" = sk."SkillID"
       WHERE s."MentorID" = $1
     `;
     const params: any[] = [userId];

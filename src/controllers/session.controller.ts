@@ -90,6 +90,12 @@ export const proposeTimeSlots = asyncHandler(async (req: Request, res: Response)
        JSON.stringify({ sessionId, count: inserted.length })]
     );
 
+    // Emit socket event for real-time update
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("session:slots-proposed", { sessionId });
+    }
+
     return res.status(201).json({
       success: true,
       data: inserted,
@@ -176,6 +182,12 @@ export const selectTimeSlot = asyncHandler(async (req: Request, res: Response) =
       ]
     );
 
+    // Emit socket event for real-time update
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("session:scheduled", { sessionId, title: session.Title });
+    }
+
     return res.status(200).json({
       success: true,
       data: {
@@ -214,10 +226,21 @@ export const startSession = asyncHandler(async (req: Request, res: Response) => 
 
     const session = sessionCheck.rows[0];
 
+    // If already in progress, just return success (idempotency)
+    if (session.Status === 'IN_PROGRESS') {
+      return res.status(200).json({
+        success: true,
+        data: {
+          roomId: session.MeetingRoomId,
+        },
+        message: "Session is already in progress",
+      });
+    }
+
     if (session.Status !== 'SCHEDULED') {
       return res.status(400).json({
         success: false,
-        errors: [formatError("status", "Session cannot be started")],
+        errors: [formatError("status", `Session cannot be started. Current status: ${session.Status}`)],
       });
     }
 
@@ -228,14 +251,19 @@ export const startSession = asyncHandler(async (req: Request, res: Response) => 
       [sessionId]
     );
 
-    // Add participants
+    // Add participants only if they don't exist yet
     await query(
-      `INSERT INTO "SessionParticipant" 
-       ("ParticipantID", "SessionID", "UserID", "Role", "JoinedAt", "CreatedAt")
-       VALUES 
-       (gen_random_uuid(), $1, $2, 'mentor', NOW(), NOW()),
-       (gen_random_uuid(), $1, $3, 'learner', NOW(), NOW())`,
-      [sessionId, session.MentorID, session.LearnerID]
+      `INSERT INTO "SessionParticipant" ("ParticipantID", "SessionID", "UserID", "Role", "JoinedAt", "CreatedAt")
+       SELECT gen_random_uuid(), $1, $2, 'mentor', NOW(), NOW()
+       WHERE NOT EXISTS (SELECT 1 FROM "SessionParticipant" WHERE "SessionID" = $1 AND "UserID" = $2)`,
+      [sessionId, session.MentorID]
+    );
+    
+    await query(
+      `INSERT INTO "SessionParticipant" ("ParticipantID", "SessionID", "UserID", "Role", "JoinedAt", "CreatedAt")
+       SELECT gen_random_uuid(), $1, $2, 'learner', NOW(), NOW()
+       WHERE NOT EXISTS (SELECT 1 FROM "SessionParticipant" WHERE "SessionID" = $1 AND "UserID" = $2)`,
+      [sessionId, session.LearnerID]
     );
 
     await query(
@@ -245,6 +273,16 @@ export const startSession = asyncHandler(async (req: Request, res: Response) => 
       [session.LearnerID, "Session Started", `Your session has started. Join now!`,
        JSON.stringify({ sessionId, roomId: session.MeetingRoomId })]
     );
+
+    // Emit socket event for real-time update
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("session:started", { 
+        sessionId, 
+        title: session.Title, 
+        roomId: session.MeetingRoomId 
+      });
+    }
 
     return res.status(200).json({
       success: true,
@@ -307,6 +345,12 @@ export const endSession = asyncHandler(async (req: Request, res: Response) => {
        JSON.stringify({ sessionId })]
     );
 
+    // Emit socket event for real-time update
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("session:ended", { sessionId });
+    }
+
     return res.status(200).json({
       success: true,
       data: session,
@@ -351,7 +395,7 @@ export const getSessionMeetingInfo = asyncHandler(async (req: Request, res: Resp
     });
   } catch (error) {
     console.error("Get session meeting info error:", error);
-    return res.status(500).json({
+    return res.status(500).json({  
       success: false,
       errors: [formatError("server", "Failed to get meeting info")],
     });

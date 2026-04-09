@@ -296,6 +296,16 @@ export const requestSession = asyncHandler(async (req: Request, res: Response) =
         JSON.stringify({ sessionId: session.SessionID, skillId })]
     );
 
+    // Emit socket event for real-time update
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("session:new-request", {
+        sessionId: session.SessionID,
+        mentorId: mentorId,
+        learnerName: (req as any).user?.FullName
+      });
+    }
+
     return res.status(201).json({
       success: true,
       data: session,
@@ -423,6 +433,15 @@ export const cancelSession = asyncHandler(async (req: Request, res: Response) =>
       [session.MentorID, "Session Cancelled", `Learner cancelled the session`,
       JSON.stringify({ sessionId })]
     );
+
+    // Emit socket event for real-time update
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("session:cancelled", {
+        sessionId: sessionId,
+        by: 'learner'
+      });
+    }
 
     return res.status(200).json({
       success: true,
