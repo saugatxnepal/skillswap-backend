@@ -257,11 +257,11 @@ export const requestSession = asyncHandler(async (req: Request, res: Response) =
       });
     }
 
-    // Create session
+    // Create session - FIXED: Added CreatedAt and UpdatedAt with NOW()
     const sessionResult = await query(
       `INSERT INTO "Session" 
-       ("SessionID", "Title", "Description", "LearnerID", "MentorID", "Status")
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, 'PENDING_MATCH')
+       ("SessionID", "Title", "Description", "LearnerID", "MentorID", "Status", "CreatedAt", "UpdatedAt")
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, 'PENDING_MATCH', NOW(), NOW())
        RETURNING *`,
       [title, description || null, learnerId, mentorId]
     );
@@ -270,8 +270,8 @@ export const requestSession = asyncHandler(async (req: Request, res: Response) =
 
     // Link skill to session
     await query(
-      `INSERT INTO "SessionSkill" ("SessionSkillID", "SessionID", "SkillID")
-       VALUES (gen_random_uuid(), $1, $2)`,
+      `INSERT INTO "SessionSkill" ("SessionSkillID", "SessionID", "SkillID", "CreatedAt")
+       VALUES (gen_random_uuid(), $1, $2, NOW())`,
       [session.SessionID, skillId]
     );
 
@@ -280,8 +280,8 @@ export const requestSession = asyncHandler(async (req: Request, res: Response) =
       for (const slot of proposedTimeSlots) {
         await query(
           `INSERT INTO "TimeSlot" 
-           ("TimeSlotID", "SessionID", "UserID", "StartTime", "EndTime", "IsAvailable", "IsSelected")
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, true, false)`,
+           ("TimeSlotID", "SessionID", "UserID", "StartTime", "EndTime", "IsAvailable", "IsSelected", "CreatedAt")
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, true, false, NOW())`,
           [session.SessionID, learnerId, slot.startTime, slot.endTime]
         );
       }
@@ -290,8 +290,8 @@ export const requestSession = asyncHandler(async (req: Request, res: Response) =
     // Create notification for mentor
     await query(
       `INSERT INTO "Notification" 
-       ("NotificationID", "UserID", "Type", "Title", "Content", "Data")
-       VALUES (gen_random_uuid(), $1, 'MENTOR_REQUEST', $2, $3, $4)`,
+       ("NotificationID", "UserID", "Type", "Title", "Content", "Data", "CreatedAt")
+       VALUES (gen_random_uuid(), $1, 'MENTOR_REQUEST', $2, $3, $4, NOW())`,
       [mentorId, "New Session Request", `${(req as any).user?.FullName} wants to learn from you`,
         JSON.stringify({ sessionId: session.SessionID, skillId })]
     );
