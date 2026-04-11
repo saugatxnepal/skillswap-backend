@@ -1,0 +1,484 @@
+// datasource db {
+//   provider = "postgresql"
+// }
+
+// generator client {
+//   provider = "prisma-client-js"
+// }
+
+// enum Role {
+//   Admin
+//   Mentor
+//   Learner
+// }
+
+// enum UserStatus {
+//   Active
+//   Inactive
+//   Banned
+// }
+
+// enum SessionStatus {
+//   PENDING_MATCH
+//   SCHEDULED
+//   IN_PROGRESS
+//   COMPLETED
+//   CANCELLED
+//   REPORTED
+// }
+
+// enum MessageType {
+//   TEXT
+//   IMAGE
+//   FILE
+//   SYSTEM
+// }
+
+// enum ReportStatus {
+//   PENDING
+//   REVIEWED
+//   RESOLVED
+//   DISMISSED
+// }
+
+// enum ReportReason {
+//   INAPPROPRIATE_BEHAVIOR
+//   TECHNICAL_ISSUES
+//   NO_SHOW
+//   HARASSMENT
+//   SPAM
+//   OTHER
+// }
+
+// enum InviteStatus {
+//   PENDING
+//   ACCEPTED
+//   DECLINED
+//   EXPIRED
+// }
+
+// enum SessionType {
+//   VIDEO
+//   CHAT
+//   HYBRID
+// }
+
+// enum NotificationType {
+//   SESSION_SCHEDULED
+//   SESSION_REMINDER
+//   NEW_MESSAGE
+//   MATCH_FOUND
+//   SESSION_CANCELLED
+//   SESSION_COMPLETED
+//   REVIEW_RECEIVED
+//   REPORT_RESOLVED
+//   MENTOR_REQUEST
+//   LEARNER_REQUEST
+// }
+
+// model User {
+//   UserID               String     @id @default(uuid())
+//   FullName             String
+//   Email                String     @unique
+//   PasswordHash         String
+//   Role                 Role       @default(Learner)
+//   Bio                  String?
+//   Status               UserStatus @default(Active)
+//   ProfileImageURL      String?
+//   Timezone             String?    @default("UTC")
+//   NotificationPreferences Json?   @default("{\"email\": true, \"inApp\": true}")
+//   IsOnline             Boolean    @default(false)
+//   LastSeen             DateTime?  @default(now())
+//   CreatedAt            DateTime   @default(now())
+//   UpdatedAt            DateTime   @default(now()) @updatedAt
+//   PasswordResetToken   String?
+//   PasswordResetExpires DateTime?
+  
+//   // Relations
+//   mentorSkills         UserSkill[]
+//   learnerSessions      Session[]   @relation("LearnerSessions")
+//   mentorSessions       Session[]   @relation("MentorSessions")
+//   sentMessages         Message[]   @relation("SentMessages")
+//   receivedMessages     Message[]   @relation("ReceivedMessages")
+//   availability         Availability[] @relation("UserAvailability")
+//   mentorReviews        Review[]    @relation("MentorReviews")
+//   learnerReviews       Review[]    @relation("LearnerReviews")
+//   reportsMade          Report[]    @relation("ReportsMade")
+//   reportsReceived      Report[]    @relation("ReportsReceived")
+//   sessionParticipants  SessionParticipant[] @relation("ParticipantSessions")
+//   timeSlots            TimeSlot[]  @relation("UserTimeSlots")
+//   notifications        Notification[] @relation("UserNotifications")
+//   webRTCLogs           WebRTCLog[] @relation("UserWebRTCLogs")
+//   adminActions         AdminAction[] @relation("AdminActions")
+//   targetedByActions    AdminAction[] @relation("TargetedUserActions")
+//   sessionMonitoringLogs SessionMonitoringLog[] @relation("AdminMonitoringLogs")
+//   sessionInvitesSent   SessionInvite[] @relation("Inviter")
+//   sessionInvitesReceived SessionInvite[] @relation("Invitee")
+//   sessionQuestions     SessionQuestion[]
+//   meetingRecordings    MeetingRecording[]
+  
+//   // Chat relations
+//   conversations1       Conversation[] @relation("Participant1")
+//   conversations2       Conversation[] @relation("Participant2")
+// }
+
+// model Skill {
+//   SkillID          String         @id @default(uuid())
+//   Name             String
+//   Description      String?
+//   DetailedContent  String?
+//   IsAvailable      Boolean        @default(true) 
+//   SkillCategoryID  String
+//   SkillCategory    SkillCategory  @relation(fields: [SkillCategoryID], references: [SkillCategoryID])
+  
+//   // Relations
+//   userSkills       UserSkill[]
+//   sessionSkills    SessionSkill[]
+  
+//   @@index([IsAvailable])
+//   @@index([SkillCategoryID])
+// }
+
+// model SkillCategory {
+//   SkillCategoryID String   @id @default(uuid())
+//   Name            String   @unique
+//   Description     String?
+//   Icon            String?
+//   DisplayOrder    Int      @default(0)
+  
+//   // Relations
+//   Skills          Skill[]
+// }
+
+// model UserSkill {
+//   UserSkillID     String   @id @default(uuid())
+//   UserID          String
+//   User            User     @relation(fields: [UserID], references: [UserID])
+//   SkillID         String
+//   Skill           Skill    @relation(fields: [SkillID], references: [SkillID])
+//   IsMentor        Boolean  @default(false)
+//   IsLearner       Boolean  @default(true)
+//   ExperienceLevel Int?     // 1-5 scale
+//   TeachingStyle   String?  // e.g., "structured", "flexible", "project-based"
+//   CreatedAt       DateTime @default(now())
+//   UpdatedAt       DateTime @updatedAt
+  
+//   @@unique([UserID, SkillID])
+//   @@index([UserID, IsMentor])
+//   @@index([SkillID, IsMentor])
+// }
+
+// model Session {
+//   SessionID       String        @id @default(uuid())
+//   Title           String
+//   Description     String?
+//   LearnerID       String
+//   Learner         User          @relation("LearnerSessions", fields: [LearnerID], references: [UserID])
+//   MentorID        String?
+//   Mentor          User?         @relation("MentorSessions", fields: [MentorID], references: [UserID])
+//   Status          SessionStatus @default(PENDING_MATCH)
+//   SessionType     SessionType   @default(VIDEO)
+//   ScheduledStart  DateTime?
+//   ScheduledEnd    DateTime?
+//   ActualStartTime DateTime?
+//   ActualEndTime   DateTime?
+//   MeetingLink     String?
+//   MeetingRoomId   String?
+//   MeetingProvider String?       // "google_meet", "zoom", "jitsi"
+//   RecordingUrl    String?
+//   Duration        Int?          // Actual duration in minutes
+//   CreatedAt       DateTime      @default(now())
+//   UpdatedAt       DateTime      @updatedAt
+  
+//   // Relations
+//   messages        Message[]     @relation("SessionMessages")
+//   timeSlots       TimeSlot[]    @relation("SessionTimeSlots")
+//   reviews         Review[]      @relation("SessionReviews")
+//   skills          SessionSkill[]
+//   participants    SessionParticipant[] @relation("SessionParticipants")
+//   reports         Report[]      @relation("SessionReports")
+//   adminActions    AdminAction[] @relation("SessionAdminActions")
+//   webRTCLogs      WebRTCLog[]   @relation("SessionWebRTCLogs")
+//   monitoringLogs  SessionMonitoringLog[] @relation("SessionMonitoringLogs")
+//   invites         SessionInvite[]
+//   questions       SessionQuestion[]
+//   recordings      MeetingRecording[]
+  
+//   @@index([Status])
+//   @@index([ScheduledStart])
+//   @@index([MentorID, Status])
+//   @@index([LearnerID, Status])
+// }
+
+// model SessionSkill {
+//   SessionSkillID String  @id @default(uuid())
+//   SessionID      String
+//   Session        Session @relation(fields: [SessionID], references: [SessionID])
+//   SkillID        String
+//   Skill          Skill   @relation(fields: [SkillID], references: [SkillID])
+//   CreatedAt      DateTime @default(now())
+  
+//   @@unique([SessionID, SkillID])
+//   @@index([SkillID])
+// }
+
+// model SessionParticipant {
+//   ParticipantID   String   @id @default(uuid())
+//   SessionID       String
+//   Session         Session  @relation("SessionParticipants", fields: [SessionID], references: [SessionID])
+//   UserID          String
+//   User            User     @relation("ParticipantSessions", fields: [UserID], references: [UserID])
+//   Role            String   // "mentor", "learner", "admin_monitor"
+//   JoinedAt        DateTime?
+//   LeftAt          DateTime?
+//   IsActive        Boolean  @default(true)
+//   ConnectionQuality String? // "good", "poor", "excellent"
+//   CreatedAt       DateTime @default(now())
+  
+//   @@unique([SessionID, UserID])
+//   @@index([UserID])
+// }
+
+// model TimeSlot {
+//   TimeSlotID    String   @id @default(uuid())
+//   SessionID     String
+//   Session       Session  @relation("SessionTimeSlots", fields: [SessionID], references: [SessionID])
+//   UserID        String
+//   User          User     @relation("UserTimeSlots", fields: [UserID], references: [UserID])
+//   StartTime     DateTime
+//   EndTime       DateTime
+//   IsAvailable   Boolean  @default(true)
+//   IsSelected    Boolean  @default(false)
+//   SelectedBy    String?  // UserID of who selected this slot
+//   CreatedAt     DateTime @default(now())
+  
+//   @@index([SessionID, IsSelected])
+//   @@index([StartTime])
+// }
+
+// model Availability {
+//   AvailabilityID String   @id @default(uuid())
+//   UserID         String
+//   User           User     @relation("UserAvailability", fields: [UserID], references: [UserID])
+//   DayOfWeek      Int      // 0-6 (Sunday-Saturday)
+//   StartTime      String   // Format: "HH:MM"
+//   EndTime        String   // Format: "HH:MM"
+//   IsRecurring    Boolean  @default(true)
+//   SpecificDate   DateTime?
+//   IsActive       Boolean  @default(true)
+//   CreatedAt      DateTime @default(now())
+//   UpdatedAt      DateTime @updatedAt
+  
+//   @@index([UserID, IsRecurring])
+//   @@index([SpecificDate])
+// }
+
+// model SessionInvite {
+//   InviteID      String       @id @default(uuid())
+//   SessionID     String
+//   Session       Session      @relation(fields: [SessionID], references: [SessionID])
+//   InviterID     String
+//   Inviter       User         @relation("Inviter", fields: [InviterID], references: [UserID])
+//   InviteeID     String
+//   Invitee       User         @relation("Invitee", fields: [InviteeID], references: [UserID])
+//   Status        InviteStatus @default(PENDING)
+//   Message       String?
+//   ExpiresAt     DateTime
+//   RespondedAt   DateTime?
+//   CreatedAt     DateTime     @default(now())
+  
+//   @@unique([SessionID, InviteeID])
+//   @@index([InviteeID, Status])
+//   @@index([ExpiresAt])
+// }
+
+// model Message {
+//   MessageID      String      @id @default(uuid())
+//   SessionID      String?     // Optional - for session-specific messages
+//   ConversationID String?     // For DM conversations
+//   SenderID       String
+//   ReceiverID     String?     // For direct messages
+//   Content        String
+//   MessageType    MessageType @default(TEXT)
+//   FileURL        String?
+//   FileName       String?
+//   FileSize       Int?
+//   IsRead         Boolean     @default(false)
+//   ReadAt         DateTime?
+//   IsEdited       Boolean     @default(false)
+//   EditedAt       DateTime?
+//   IsDeleted      Boolean     @default(false)
+//   DeletedFor     String[]    // Users who soft-deleted this message
+//   ReplyToID      String?
+//   CreatedAt      DateTime    @default(now())
+//   UpdatedAt      DateTime    @updatedAt
+  
+//   // Relations
+//   session        Session?    @relation("SessionMessages", fields: [SessionID], references: [SessionID])
+//   conversation   Conversation? @relation(fields: [ConversationID], references: [ConversationID])
+//   sender         User        @relation("SentMessages", fields: [SenderID], references: [UserID])
+//   receiver       User?       @relation("ReceivedMessages", fields: [ReceiverID], references: [UserID])
+  
+//   @@index([SessionID, CreatedAt])
+//   @@index([ConversationID, CreatedAt])
+//   @@index([SenderID])
+//   @@index([ReceiverID])
+// }
+
+// model Conversation {
+//   ConversationID String      @id @default(uuid())
+//   Participant1ID String
+//   Participant2ID String
+//   LastMessage    String?
+//   LastMessageAt  DateTime?
+//   CreatedAt      DateTime    @default(now())
+//   UpdatedAt      DateTime    @updatedAt
+  
+//   // Relations
+//   participant1   User        @relation("Participant1", fields: [Participant1ID], references: [UserID])
+//   participant2   User        @relation("Participant2", fields: [Participant2ID], references: [UserID])
+//   messages       Message[]
+  
+//   @@unique([Participant1ID, Participant2ID])
+//   @@index([Participant1ID, Participant2ID])
+//   @@index([LastMessageAt])
+// }
+
+// model SessionQuestion {
+//   QuestionID    String   @id @default(uuid())
+//   SessionID     String
+//   Session       Session  @relation(fields: [SessionID], references: [SessionID])
+//   UserID        String
+//   User          User     @relation(fields: [UserID], references: [UserID])
+//   Question      String
+//   Answer        String?
+//   IsAnswered    Boolean  @default(false)
+//   AnsweredBy    String?  // UserID who answered
+//   AnsweredAt    DateTime?
+//   CreatedAt     DateTime @default(now())
+  
+//   @@index([SessionID, IsAnswered])
+// }
+
+// model MeetingRecording {
+//   RecordingID   String   @id @default(uuid())
+//   SessionID     String
+//   Session       Session  @relation(fields: [SessionID], references: [SessionID])
+//   UserID        String   // User who recorded
+//   User          User     @relation(fields: [UserID], references: [UserID])
+//   RecordingUrl  String
+//   Duration      Int?     // in seconds
+//   FileSize      BigInt?
+//   Status        String   @default("processing") // processing, ready, failed
+//   IsArchived    Boolean  @default(false)
+//   CreatedAt     DateTime @default(now())
+  
+//   @@index([SessionID])
+// }
+
+// model Review {
+//   ReviewID       String   @id @default(uuid())
+//   SessionID      String
+//   Session        Session  @relation("SessionReviews", fields: [SessionID], references: [SessionID])
+//   ReviewerID     String
+//   Reviewer       User     @relation("LearnerReviews", fields: [ReviewerID], references: [UserID])
+//   RevieweeID     String
+//   Reviewee       User     @relation("MentorReviews", fields: [RevieweeID], references: [UserID])
+//   Rating         Int      // 1-5 stars
+//   Comment        String?
+//   IsMentorReview Boolean  // true if reviewing mentor, false if reviewing learner
+//   Tags           String[] // e.g., ["knowledgeable", "patient", "clear"]
+//   IsPublic       Boolean  @default(true)
+//   CreatedAt      DateTime @default(now())
+//   UpdatedAt      DateTime @updatedAt
+  
+//   @@unique([SessionID, ReviewerID, RevieweeID])
+//   @@index([RevieweeID, Rating])
+//   @@index([IsMentorReview])
+// }
+
+// model Report {
+//   ReportID       String       @id @default(uuid())
+//   SessionID      String?
+//   Session        Session?     @relation("SessionReports", fields: [SessionID], references: [SessionID])
+//   ReporterID     String
+//   Reporter       User         @relation("ReportsMade", fields: [ReporterID], references: [UserID])
+//   ReportedUserID String
+//   ReportedUser   User         @relation("ReportsReceived", fields: [ReportedUserID], references: [UserID])
+//   Reason         ReportReason
+//   Description    String
+//   Evidence       Json?        // Array of file URLs, screenshots
+//   Status         ReportStatus @default(PENDING)
+//   AdminNotes     String?
+//   ResolvedBy     String?      // AdminID who resolved
+//   CreatedAt      DateTime     @default(now())
+//   ResolvedAt     DateTime?
+  
+//   @@index([ReportedUserID, Status])
+//   @@index([Status])
+// }
+
+// model AdminAction {
+//   ActionID      String   @id @default(uuid())
+//   AdminID       String
+//   Admin         User     @relation("AdminActions", fields: [AdminID], references: [UserID])
+//   ActionType    String   // WARNING, SUSPENSION, BAN, SESSION_MONITOR, RESOLVE_REPORT
+//   TargetUserID  String?
+//   TargetUser    User?    @relation("TargetedUserActions", fields: [TargetUserID], references: [UserID])
+//   SessionID     String?
+//   Session       Session? @relation("SessionAdminActions", fields: [SessionID], references: [SessionID])
+//   Description   String
+//   Metadata      Json?    // Additional action-specific data
+//   CreatedAt     DateTime @default(now())
+  
+//   @@index([AdminID])
+//   @@index([TargetUserID])
+// }
+
+// model Notification {
+//   NotificationID String          @id @default(uuid())
+//   UserID         String
+//   User           User            @relation("UserNotifications", fields: [UserID], references: [UserID])
+//   Type           NotificationType
+//   Title          String
+//   Content        String
+//   Data           Json?           // Additional data like sessionId, messageId
+//   IsRead         Boolean         @default(false)
+//   ReadAt         DateTime?
+//   IsEmailSent    Boolean         @default(false)
+//   EmailSentAt    DateTime?
+//   CreatedAt      DateTime        @default(now())
+  
+//   @@index([UserID, IsRead])
+//   @@index([CreatedAt])
+// }
+
+// model WebRTCLog {
+//   LogID         String   @id @default(uuid())
+//   SessionID     String
+//   Session       Session  @relation("SessionWebRTCLogs", fields: [SessionID], references: [SessionID])
+//   UserID        String
+//   User          User     @relation("UserWebRTCLogs", fields: [UserID], references: [UserID])
+//   EventType     String   // CONNECTION, DISCONNECTION, ICE_CANDIDATE, OFFER, ANSWER, ERROR
+//   Data          Json?
+//   Timestamp     DateTime @default(now())
+  
+//   @@index([SessionID, Timestamp])
+//   @@index([UserID])
+// }
+
+// model SessionMonitoringLog {
+//   LogID         String   @id @default(uuid())
+//   SessionID     String
+//   Session       Session  @relation("SessionMonitoringLogs", fields: [SessionID], references: [SessionID])
+//   AdminID       String
+//   Admin         User     @relation("AdminMonitoringLogs", fields: [AdminID], references: [UserID])
+//   Action        String   // JOINED, LEFT, MUTED, UNMUTED, WARNING_ISSUED, etc.
+//   Notes         String?
+//   Metadata      Json?
+//   JoinedAt      DateTime
+//   LeftAt        DateTime?
+//   CreatedAt     DateTime @default(now())
+  
+//   @@index([SessionID])
+// }

@@ -108,13 +108,10 @@ model User {
   sessionParticipants  SessionParticipant[] @relation("ParticipantSessions")
   timeSlots            TimeSlot[]  @relation("UserTimeSlots")
   notifications        Notification[] @relation("UserNotifications")
-  webRTCLogs           WebRTCLog[] @relation("UserWebRTCLogs")
   adminActions         AdminAction[] @relation("AdminActions")
   targetedByActions    AdminAction[] @relation("TargetedUserActions")
-  sessionMonitoringLogs SessionMonitoringLog[] @relation("AdminMonitoringLogs")
   sessionInvitesSent   SessionInvite[] @relation("Inviter")
   sessionInvitesReceived SessionInvite[] @relation("Invitee")
-  sessionQuestions     SessionQuestion[]
   meetingRecordings    MeetingRecording[]
   
   // Chat relations
@@ -198,10 +195,7 @@ model Session {
   participants    SessionParticipant[] @relation("SessionParticipants")
   reports         Report[]      @relation("SessionReports")
   adminActions    AdminAction[] @relation("SessionAdminActions")
-  webRTCLogs      WebRTCLog[]   @relation("SessionWebRTCLogs")
-  monitoringLogs  SessionMonitoringLog[] @relation("SessionMonitoringLogs")
   invites         SessionInvite[]
-  questions       SessionQuestion[]
   recordings      MeetingRecording[]
   
   @@index([Status])
@@ -343,23 +337,6 @@ model Conversation {
   @@index([Participant1ID, Participant2ID])
   @@index([LastMessageAt])
 }
-
-model SessionQuestion {
-  QuestionID    String   @id @default(uuid())
-  SessionID     String
-  Session       Session  @relation(fields: [SessionID], references: [SessionID])
-  UserID        String
-  User          User     @relation(fields: [UserID], references: [UserID])
-  Question      String
-  Answer        String?
-  IsAnswered    Boolean  @default(false)
-  AnsweredBy    String?  // UserID who answered
-  AnsweredAt    DateTime?
-  CreatedAt     DateTime @default(now())
-  
-  @@index([SessionID, IsAnswered])
-}
-
 model MeetingRecording {
   RecordingID   String   @id @default(uuid())
   SessionID     String
@@ -451,34 +428,4 @@ model Notification {
   
   @@index([UserID, IsRead])
   @@index([CreatedAt])
-}
-
-model WebRTCLog {
-  LogID         String   @id @default(uuid())
-  SessionID     String
-  Session       Session  @relation("SessionWebRTCLogs", fields: [SessionID], references: [SessionID])
-  UserID        String
-  User          User     @relation("UserWebRTCLogs", fields: [UserID], references: [UserID])
-  EventType     String   // CONNECTION, DISCONNECTION, ICE_CANDIDATE, OFFER, ANSWER, ERROR
-  Data          Json?
-  Timestamp     DateTime @default(now())
-  
-  @@index([SessionID, Timestamp])
-  @@index([UserID])
-}
-
-model SessionMonitoringLog {
-  LogID         String   @id @default(uuid())
-  SessionID     String
-  Session       Session  @relation("SessionMonitoringLogs", fields: [SessionID], references: [SessionID])
-  AdminID       String
-  Admin         User     @relation("AdminMonitoringLogs", fields: [AdminID], references: [UserID])
-  Action        String   // JOINED, LEFT, MUTED, UNMUTED, WARNING_ISSUED, etc.
-  Notes         String?
-  Metadata      Json?
-  JoinedAt      DateTime
-  LeftAt        DateTime?
-  CreatedAt     DateTime @default(now())
-  
-  @@index([SessionID])
 }
