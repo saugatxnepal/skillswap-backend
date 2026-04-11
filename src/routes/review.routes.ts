@@ -29,7 +29,7 @@ router.post("/sessions/:sessionId/reviews", submitReview);
 router.get("/my-reviews", getMyReviews);
 
 // Update or delete my review
-router.put("/reviews/:reviewId", updateReview);
+router.put("/reviews/:reviewId", updateReview); 
 router.patch("/reviews/:reviewId", updateReview);
 router.delete("/reviews/:reviewId", deleteReview);
 

@@ -627,6 +627,19 @@ export const setupSocket = (server: HttpServer) => {
       }
     });
 
+    // WebRTC: Chat Message (Temporary relay, no DB)
+    socket.on("webrtc:chat-message", ({ text }) => {
+      const roomId = (socket as any).webrtcRoomId;
+      if (roomId) {
+        socket.to(`webrtc:${roomId}`).emit("webrtc:chat-message", {
+          text,
+          senderId: (socket as any).webrtcUserId,
+          senderName: (socket as any).webrtcUserName,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    });
+
     // Delete message
     socket.on("message:delete", async (data: { messageId: string }) => {
       const { messageId } = data;

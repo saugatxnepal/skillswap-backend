@@ -398,7 +398,7 @@ export const setWeeklyAvailability = asyncHandler(async (req: Request, res: Resp
     const inserted = [];
     for (const slot of availability) {
       const { dayOfWeek, startTime, endTime } = slot;
-      
+
       if (dayOfWeek === undefined || !startTime || !endTime) {
         continue;
       }

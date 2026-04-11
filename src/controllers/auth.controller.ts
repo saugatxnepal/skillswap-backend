@@ -7,6 +7,8 @@ import { comparePassword, hashPassword } from "../utils/hash.util";
 import { generateRefreshToken, generateToken } from "../utils/token.util";
 import { Role, UserStatus } from "../constants/roles";
 import { TokenBlacklist } from "../utils/tokenBlacklist.util";
+import crypto from 'crypto';
+import { sendPasswordResetEmail, sendPasswordResetConfirmation } from '../utils/email.util';
 
 // Register User
 export const registerUser = asyncHandler(
@@ -360,3 +362,159 @@ export const getUserActivity = asyncHandler(
     }
   },
 );
+
+export const forgotPassword = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        errors: [formatError("email", "Email is required")],
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Find user by email
+    const userResult = await query(
+      `SELECT "UserID", "FullName", "Email" FROM "User" WHERE "Email" = $1 AND "Status" = 'Active'`,
+      [normalizedEmail]
+    );
+
+    if (userResult.rows.length === 0) {
+      // For security, don't reveal that user doesn't exist
+      return res.status(200).json({
+        success: true,
+        message: "If your email is registered, you will receive a password reset link.",
+      });
+    }
+
+    const user = userResult.rows[0];
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+    const resetExpiry = new Date();
+    resetExpiry.setHours(resetExpiry.getHours() + 1); // Token expires in 1 hour
+
+    // Save token to database
+    await query(
+      `UPDATE "User" 
+       SET "PasswordResetToken" = $1, "PasswordResetExpires" = $2, "UpdatedAt" = NOW()
+       WHERE "UserID" = $3`,
+      [resetTokenHash, resetExpiry, user.UserID]
+    );
+
+    // Send email
+    await sendPasswordResetEmail(user.Email, resetToken, user.FullName);
+
+    return res.status(200).json({
+      success: true,
+      message: "Password reset link has been sent to your email.",
+    });
+  } catch (error) {
+    console.error("[ForgotPassword] Error:", error);
+    return res.status(500).json({
+      success: false,
+      errors: [formatError("server", "Failed to send reset email")],
+    });
+  }
+});
+
+// Reset Password - Verify token and set new password
+export const resetPassword = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const { token } = req.params;
+    const { newPassword } = req.body;
+
+    if (!newPassword) {
+      return res.status(400).json({
+        success: false,
+        errors: [formatError("newPassword", "New password is required")],
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        errors: [formatError("newPassword", "Password must be at least 6 characters long")],
+      });
+    }
+
+    // Hash the token to compare with stored hash
+    const resetTokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
+
+    // Find user with valid token
+    const userResult = await query(
+      `SELECT "UserID", "FullName", "Email" FROM "User" 
+       WHERE "PasswordResetToken" = $1 AND "PasswordResetExpires" > NOW()`,
+      [resetTokenHash]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        errors: [formatError("token", "Invalid or expired reset token")],
+      });
+    }
+
+    const user = userResult.rows[0];
+
+    // Hash new password
+    const newPasswordHash = await hashPassword(newPassword);
+
+    // Update user password and clear reset token
+    await query(
+      `UPDATE "User" 
+       SET "PasswordHash" = $1, 
+           "PasswordResetToken" = NULL, 
+           "PasswordResetExpires" = NULL, 
+           "UpdatedAt" = NOW()
+       WHERE "UserID" = $2`,
+      [newPasswordHash, user.UserID]
+    );
+
+    // Send confirmation email
+    await sendPasswordResetConfirmation(user.Email, user.FullName);
+
+    return res.status(200).json({
+      success: true,
+      message: "Password has been reset successfully. Please login with your new password.",
+    });
+  } catch (error) {
+    console.error("[ResetPassword] Error:", error);
+    return res.status(500).json({
+      success: false,
+      errors: [formatError("server", "Failed to reset password")],
+    });
+  }
+});
+
+// Validate reset token (optional - for frontend to check if token is valid)
+export const validateResetToken = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const { token } = req.params;
+
+    const resetTokenHash = crypto.createHash('sha256').update(String(token)).digest('hex');
+
+    const userResult = await query(
+      `SELECT "UserID" FROM "User" 
+       WHERE "PasswordResetToken" = $1 AND "PasswordResetExpires" > NOW()`,
+      [resetTokenHash]
+    );
+
+    const isValid = userResult.rows.length > 0;
+
+    return res.status(200).json({
+      success: true,
+      data: { isValid },
+    });
+  } catch (error) {
+    console.error("[ValidateResetToken] Error:", error);
+    return res.status(500).json({
+      success: false,
+      errors: [formatError("server", "Failed to validate token")],
+    });
+  }
+});

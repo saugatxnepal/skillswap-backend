@@ -9,7 +9,10 @@ import {
   getUserSessions,
   verifyEmail,
   checkEmailAvailability,
-  getUserActivity
+  getUserActivity,
+  forgotPassword,
+  resetPassword,
+  validateResetToken,
 } from "../controllers/auth.controller";
 import { authenticateJWT } from "../middlewares/auth.middleware";
 
@@ -19,15 +22,13 @@ const router = Router();
 router.post("/register", registerUser);
 router.post("/login", loginUser);
 
-router.get(
-  "/verify-email/:token",
-  verifyEmail
-);
+// Password reset routes
+router.post("/forgot-password", forgotPassword);
+router.post("/reset-password/:token", resetPassword);
+router.get("/validate-reset-token/:token", validateResetToken);
 
-router.get(
-  "/check-email/:email",
-  checkEmailAvailability
-);
+router.get("/verify-email/:token", verifyEmail);
+router.get("/check-email/:email", checkEmailAvailability);
 
 // Protected routes
 router.use(authenticateJWT);
@@ -35,19 +36,8 @@ router.use(authenticateJWT);
 router.post("/logout", logoutUser);
 router.post("/logout-all", logoutAllDevices);
 
-router.get(
-  "/profile",
-  getProfile
-);
-
-router.get(
-  "/sessions",
-  getUserSessions
-);
-
-router.get(
-  "/activity",
-  getUserActivity
-);
+router.get("/profile", getProfile);
+router.get("/sessions", getUserSessions);
+router.get("/activity", getUserActivity);
 
 export default router;
