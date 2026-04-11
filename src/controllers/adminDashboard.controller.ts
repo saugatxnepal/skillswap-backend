@@ -77,7 +77,7 @@ export const getDashboardStats = asyncHandler(async (req: Request, res: Response
         COUNT(CASE WHEN "Status" = 'REPORTED' THEN 1 END) as reported,
         COUNT(CASE WHEN "CreatedAt" > NOW() - INTERVAL '7 days' THEN 1 END) as new_sessions_week,
         COUNT(CASE WHEN "CreatedAt" > NOW() - INTERVAL '30 days' THEN 1 END) as new_sessions_month,
-        COALESCE(AVG("Duration"), 0) as avg_duration_minutes
+        COALESCE(AVG(EXTRACT(EPOCH FROM ("ActualEndTime" - "ActualStartTime")) / 60), 0) as avg_duration_minutes
       FROM "Session"
     `);
 
@@ -118,12 +118,12 @@ export const getDashboardStats = asyncHandler(async (req: Request, res: Response
       FROM "Report"
     `);
 
-    // Get engagement statistics
-    const engagementStats = await query(`
+    // Get notification statistics (removed SessionQuestion reference)
+    const notificationStats = await query(`
       SELECT 
-        (SELECT COUNT(*) FROM "Message") as total_messages,
-        (SELECT COUNT(*) FROM "Notification" WHERE "IsRead" = false) as unread_notifications,
-        (SELECT COUNT(*) FROM "SessionQuestion" WHERE "IsAnswered" = false) as unanswered_questions
+        COUNT(*) as total_notifications,
+        COUNT(CASE WHEN "IsRead" = false THEN 1 END) as unread_notifications
+      FROM "Notification"
     `);
 
     return res.status(200).json({
@@ -134,7 +134,7 @@ export const getDashboardStats = asyncHandler(async (req: Request, res: Response
         skills: skillStats.rows[0],
         reviews: reviewStats.rows[0],
         reports: reportStats.rows[0],
-        engagement: engagementStats.rows[0],
+        notifications: notificationStats.rows[0],
       },
     });
   } catch (error) {
@@ -526,142 +526,67 @@ export const getActivityLogs = asyncHandler(async (req: Request, res: Response) 
     const type = getQueryString(req.query.type);
     const userId = getQueryString(req.query.userId);
 
-    // Get recent sessions
+    // Get recent sessions and user registrations (removed SessionQuestion)
     let queryText = `
-      SELECT 
+      (SELECT 
         'session' as type,
         s."SessionID" as id,
         s."Title" as title,
         s."Status" as status,
         s."CreatedAt" as created_at,
         m."FullName" as mentor_name,
-        l."FullName" as learner_name
+        l."FullName" as learner_name,
+        NULL as name,
+        NULL as role
       FROM "Session" s
       JOIN "User" m ON s."MentorID" = m."UserID"
-      JOIN "User" l ON s."LearnerID" = l."UserID"
-      WHERE 1=1
+      JOIN "User" l ON s."LearnerID" = l."UserID")
+      
+      UNION ALL
+      
+      (SELECT 
+        'user_registration' as type,
+        u."UserID" as id,
+        NULL as title,
+        NULL as status,
+        u."CreatedAt" as created_at,
+        NULL as mentor_name,
+        NULL as learner_name,
+        u."FullName" as name,
+        u."Role" as role
+      FROM "User" u)
+      
+      UNION ALL
+      
+      (SELECT 
+        'report' as type,
+        r."ReportID" as id,
+        r."Reason" as title,
+        r."Status" as status,
+        r."CreatedAt" as created_at,
+        NULL as mentor_name,
+        NULL as learner_name,
+        rep."FullName" as name,
+        NULL as role
+      FROM "Report" r
+      JOIN "User" rep ON r."ReporterID" = rep."UserID")
+      
+      ORDER BY created_at DESC
+      LIMIT $1 OFFSET $2
     `;
-    const params: any[] = [];
-    let paramCount = 0;
-
-    if (type === 'session') {
-      // Only sessions
-    } else if (type === 'user') {
-      // Get user registrations
-      queryText = `
-        SELECT 
-          'user_registration' as type,
-          u."UserID" as id,
-          u."FullName" as name,
-          u."Role" as role,
-          u."CreatedAt" as created_at
-        FROM "User" u
-        WHERE 1=1
-      `;
-    } else if (type === 'report') {
-      // Get reports
-      queryText = `
-        SELECT 
-          'report' as type,
-          r."ReportID" as id,
-          r."Reason" as reason,
-          r."Status" as status,
-          r."CreatedAt" as created_at,
-          rep."FullName" as reporter_name,
-          reported."FullName" as reported_name
-        FROM "Report" r
-        JOIN "User" rep ON r."ReporterID" = rep."UserID"
-        JOIN "User" reported ON r."ReportedUserID" = reported."UserID"
-        WHERE 1=1
-      `;
-    } else {
-      // Combine all
-      queryText = `
-        (SELECT 
-          'session' as type,
-          s."SessionID" as id,
-          s."Title" as title,
-          s."Status" as status,
-          s."CreatedAt" as created_at,
-          m."FullName" as mentor_name,
-          l."FullName" as learner_name,
-          NULL as name,
-          NULL as role
-        FROM "Session" s
-        JOIN "User" m ON s."MentorID" = m."UserID"
-        JOIN "User" l ON s."LearnerID" = l."UserID")
-        
-        UNION ALL
-        
-        (SELECT 
-          'user_registration' as type,
-          u."UserID" as id,
-          NULL as title,
-          NULL as status,
-          u."CreatedAt" as created_at,
-          NULL as mentor_name,
-          NULL as learner_name,
-          u."FullName" as name,
-          u."Role" as role
-        FROM "User" u)
-        
-        UNION ALL
-        
-        (SELECT 
-          'report' as type,
-          r."ReportID" as id,
-          r."Reason" as title,
-          r."Status" as status,
-          r."CreatedAt" as created_at,
-          NULL as mentor_name,
-          NULL as learner_name,
-          rep."FullName" as name,
-          NULL as role
-        FROM "Report" r
-        JOIN "User" rep ON r."ReporterID" = rep."UserID")
-        
-        ORDER BY created_at DESC
-        LIMIT $1 OFFSET $2
-      `;
-      params.push(limit, offset);
-      
-      const result = await query(queryText, params);
-      const total = 1000; // Approximate total for pagination
-      
-      return res.status(200).json({
-        success: true,
-        data: {
-          logs: result.rows,
-          pagination: {
-            page,
-            limit,
-            total,
-            pages: Math.ceil(total / limit),
-          },
-        },
-      });
-    }
-
-    if (type === 'user') {
-      if (userId) {
-        queryText += ` AND u."UserID" = $${paramCount + 1}`;
-        params.push(userId);
-        paramCount++;
-      }
-      queryText += ` ORDER BY u."CreatedAt" DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-      params.push(limit, offset);
-    } else {
-      if (userId) {
-        queryText += ` AND (s."MentorID" = $${paramCount + 1} OR s."LearnerID" = $${paramCount + 1})`;
-        params.push(userId);
-        paramCount++;
-      }
-      queryText += ` ORDER BY s."CreatedAt" DESC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
-      params.push(limit, offset);
-    }
+    
+    const params: any[] = [limit, offset];
 
     const result = await query(queryText, params);
-    const total = result.rows.length;
+    
+    // Get total count (approximate for pagination)
+    const countResult = await query(`
+      SELECT 
+        (SELECT COUNT(*) FROM "Session") +
+        (SELECT COUNT(*) FROM "User") +
+        (SELECT COUNT(*) FROM "Report") as total
+    `);
+    const total = parseInt(countResult.rows[0].total);
 
     return res.status(200).json({
       success: true,
@@ -683,7 +608,6 @@ export const getActivityLogs = asyncHandler(async (req: Request, res: Response) 
     });
   }
 });
-
 // Get admin alerts (pending reports, inactive users, etc.)
 export const getAdminAlerts = asyncHandler(async (req: Request, res: Response) => {
   try {

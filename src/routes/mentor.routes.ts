@@ -19,6 +19,7 @@ import {
   getMentorSessions,
   getSessionDetails,
   updateSessionStatus,
+  getMentorStats,
 } from "../controllers/mentor.controller";
 import { Role } from "../constants/roles";
 
@@ -89,5 +90,8 @@ router.get(
 
 // Update session status
 router.patch("/sessions/:sessionId/status", updateSessionStatus);
+
+// Mentor Stats Dashboard
+router.get("/stats", authenticateJWT, getMentorStats);
 
 export default router;

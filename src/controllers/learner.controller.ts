@@ -455,3 +455,279 @@ export const cancelSession = asyncHandler(async (req: Request, res: Response) =>
     });
   }
 });
+
+// ==================== LEARNER STATS ====================
+
+// Get learner self statistics dashboard
+export const getLearnerStats = asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const learnerId = (req as any).user?.UserID;
+
+    // Check if user is a learner
+    const userCheck = await query(
+      `SELECT "Role" FROM "User" WHERE "UserID" = $1`,
+      [learnerId]
+    );
+
+    if (userCheck.rows[0]?.Role !== Role.Learner && userCheck.rows[0]?.Role !== Role.Admin) {
+      return res.status(403).json({
+        success: false,
+        errors: [formatError("role", "Only learners can access stats")],
+      });
+    }
+
+    // 1. Session Statistics
+    const sessionStats = await query(
+      `SELECT 
+        COUNT(*) FILTER (WHERE "Status" = 'PENDING_MATCH') as "pendingMatch",
+        COUNT(*) FILTER (WHERE "Status" = 'SCHEDULED') as "scheduled",
+        COUNT(*) FILTER (WHERE "Status" = 'IN_PROGRESS') as "inProgress",
+        COUNT(*) FILTER (WHERE "Status" = 'COMPLETED') as "completed",
+        COUNT(*) FILTER (WHERE "Status" = 'CANCELLED') as "cancelled",
+        COUNT(*) FILTER (WHERE "Status" = 'REPORTED') as "reported",
+        COUNT(*) as "total"
+       FROM "Session" 
+       WHERE "LearnerID" = $1`,
+      [learnerId]
+    );
+
+    // 2. Session duration statistics (total learning hours)
+    const durationStats = await query(
+      `SELECT 
+        SUM(EXTRACT(EPOCH FROM ("ActualEndTime" - "ActualStartTime")) / 3600) as "totalLearningHours",
+        AVG(EXTRACT(EPOCH FROM ("ActualEndTime" - "ActualStartTime")) / 3600) as "averageSessionHours"
+       FROM "Session" 
+       WHERE "LearnerID" = $1 
+         AND "Status" = 'COMPLETED'
+         AND "ActualStartTime" IS NOT NULL 
+         AND "ActualEndTime" IS NOT NULL`,
+      [learnerId]
+    );
+
+    // 3. Mentor Statistics
+    const mentorStats = await query(
+      `SELECT 
+        COUNT(DISTINCT "MentorID") as "totalMentors",
+        COUNT(DISTINCT "MentorID") FILTER (WHERE "Status" = 'COMPLETED') as "completedWithMentors",
+        COUNT(DISTINCT "MentorID") FILTER (WHERE "Status" = 'SCHEDULED') as "upcomingWithMentors"
+       FROM "Session" 
+       WHERE "LearnerID" = $1`,
+      [learnerId]
+    );
+
+    // 4. Skill Statistics (what skills learner is learning)
+    const skillStats = await query(
+      `SELECT 
+        COUNT(DISTINCT ss."SkillID") as "totalSkills",
+        COUNT(DISTINCT ss."SkillID") FILTER (WHERE s."Status" = 'COMPLETED') as "completedSkills"
+       FROM "Session" s
+       JOIN "SessionSkill" ss ON s."SessionID" = ss."SessionID"
+       WHERE s."LearnerID" = $1`,
+      [learnerId]
+    );
+
+    // 5. Popular Skills (most requested by this learner)
+    const popularSkills = await query(
+      `SELECT 
+        sk."SkillID",
+        sk."Name",
+        COUNT(DISTINCT s."SessionID") as "sessionCount",
+        COUNT(DISTINCT s."MentorID") as "uniqueMentors",
+        COUNT(*) FILTER (WHERE s."Status" = 'COMPLETED') as "completedCount"
+       FROM "Skill" sk
+       JOIN "SessionSkill" ss ON sk."SkillID" = ss."SkillID"
+       JOIN "Session" s ON ss."SessionID" = s."SessionID"
+       WHERE s."LearnerID" = $1
+       GROUP BY sk."SkillID", sk."Name"
+       ORDER BY "sessionCount" DESC
+       LIMIT 5`,
+      [learnerId]
+    );
+
+    // 6. Favorite Mentors (most sessions with)
+    const favoriteMentors = await query(
+      `SELECT 
+        u."UserID",
+        u."FullName",
+        u."ProfileImageURL",
+        COUNT(*) as "sessionCount",
+        COUNT(*) FILTER (WHERE s."Status" = 'COMPLETED') as "completedCount",
+        COALESCE(AVG(r."Rating"), 0) as "avgRating"
+       FROM "Session" s
+       JOIN "User" u ON s."MentorID" = u."UserID"
+       LEFT JOIN "Review" r ON s."SessionID" = r."SessionID" AND r."ReviewerID" = $1
+       WHERE s."LearnerID" = $1
+       GROUP BY u."UserID", u."FullName", u."ProfileImageURL"
+       ORDER BY "sessionCount" DESC
+       LIMIT 5`,
+      [learnerId]
+    );
+
+    // 7. Recent Performance (last 30 days)
+    const recentPerformance = await query(
+      `SELECT 
+        DATE_TRUNC('day', "ScheduledStart") as "date",
+        COUNT(*) as "sessionsCount",
+        COUNT(*) FILTER (WHERE "Status" = 'COMPLETED') as "completedCount",
+        COUNT(*) FILTER (WHERE "Status" = 'CANCELLED') as "cancelledCount"
+       FROM "Session" 
+       WHERE "LearnerID" = $1 
+         AND "ScheduledStart" >= NOW() - INTERVAL '30 days'
+       GROUP BY DATE_TRUNC('day', "ScheduledStart")
+       ORDER BY "date" DESC
+       LIMIT 30`,
+      [learnerId]
+    );
+
+    // 8. Completion Rate
+    const totalSessions = parseInt(sessionStats.rows[0].total);
+    const completedSessions = parseInt(sessionStats.rows[0].completed);
+    const cancelledSessions = parseInt(sessionStats.rows[0].cancelled);
+    
+    const completionRate = totalSessions > 0 
+      ? ((completedSessions / (totalSessions - cancelledSessions)) * 100).toFixed(1)
+      : '0';
+
+    // 9. Reviews Given by Learner
+    const reviewsGiven = await query(
+      `SELECT 
+        COUNT(*) as "totalReviews",
+        COALESCE(AVG("Rating"), 0) as "averageRatingGiven",
+        COUNT(*) FILTER (WHERE "Rating" = 5) as "fiveStar",
+        COUNT(*) FILTER (WHERE "Rating" = 4) as "fourStar",
+        COUNT(*) FILTER (WHERE "Rating" = 3) as "threeStar",
+        COUNT(*) FILTER (WHERE "Rating" = 2) as "twoStar",
+        COUNT(*) FILTER (WHERE "Rating" = 1) as "oneStar"
+       FROM "Review" 
+       WHERE "ReviewerID" = $1`,
+      [learnerId]
+    );
+
+    // 10. Monthly Trends (last 6 months)
+    const monthlyTrends = await query(
+      `SELECT 
+        DATE_TRUNC('month', "ScheduledStart") as "month",
+        COUNT(*) as "totalSessions",
+        COUNT(*) FILTER (WHERE "Status" = 'COMPLETED') as "completedSessions",
+        COUNT(*) FILTER (WHERE "Status" = 'CANCELLED') as "cancelledSessions"
+       FROM "Session" 
+       WHERE "LearnerID" = $1 
+         AND "ScheduledStart" >= NOW() - INTERVAL '6 months'
+       GROUP BY DATE_TRUNC('month', "ScheduledStart")
+       ORDER BY "month" DESC`,
+      [learnerId]
+    );
+
+    // 11. Upcoming Sessions (next 7 days)
+    const upcomingSessions = await query(
+      `SELECT 
+        s."SessionID",
+        s."Title",
+        s."ScheduledStart",
+        s."ScheduledEnd",
+        m."FullName" as "MentorName",
+        m."ProfileImageURL" as "MentorImage",
+        sk."Name" as "SkillName"
+       FROM "Session" s
+       JOIN "User" m ON s."MentorID" = m."UserID"
+       JOIN "SessionSkill" ss ON s."SessionID" = ss."SessionID"
+       JOIN "Skill" sk ON ss."SkillID" = sk."SkillID"
+       WHERE s."LearnerID" = $1 
+         AND s."Status" = 'SCHEDULED'
+         AND s."ScheduledStart" >= NOW()
+         AND s."ScheduledStart" <= NOW() + INTERVAL '7 days'
+       ORDER BY s."ScheduledStart" ASC
+       LIMIT 5`,
+      [learnerId]
+    );
+
+    // 12. Recent Sessions (last 5 sessions)
+    const recentSessions = await query(
+      `SELECT 
+        s."SessionID",
+        s."Title",
+        s."ScheduledStart",
+        s."Status",
+        m."FullName" as "MentorName",
+        m."ProfileImageURL" as "MentorImage",
+        sk."Name" as "SkillName"
+       FROM "Session" s
+       JOIN "User" m ON s."MentorID" = m."UserID"
+       JOIN "SessionSkill" ss ON s."SessionID" = ss."SessionID"
+       JOIN "Skill" sk ON ss."SkillID" = sk."SkillID"
+       WHERE s."LearnerID" = $1
+       ORDER BY s."ScheduledStart" DESC NULLS LAST, s."CreatedAt" DESC
+       LIMIT 5`,
+      [learnerId]
+    );
+
+    // Combine all stats
+    return res.status(200).json({
+      success: true,
+      data: {
+        overview: {
+          totalSessions: parseInt(sessionStats.rows[0].total),
+          completedSessions: parseInt(sessionStats.rows[0].completed),
+          completionRate: parseFloat(completionRate),
+          totalLearningHours: parseFloat(durationStats.rows[0]?.totalLearningHours || 0),
+          averageSessionHours: parseFloat(durationStats.rows[0]?.averageSessionHours || 0),
+          totalMentors: parseInt(mentorStats.rows[0].totalMentors),
+          totalSkills: parseInt(skillStats.rows[0].totalSkills),
+          totalReviewsGiven: parseInt(reviewsGiven.rows[0].totalReviews),
+        },
+        sessions: {
+          pendingMatch: parseInt(sessionStats.rows[0].pendingMatch),
+          scheduled: parseInt(sessionStats.rows[0].scheduled),
+          inProgress: parseInt(sessionStats.rows[0].inProgress),
+          completed: parseInt(sessionStats.rows[0].completed),
+          cancelled: parseInt(sessionStats.rows[0].cancelled),
+          reported: parseInt(sessionStats.rows[0].reported),
+        },
+        learning: {
+          totalLearningHours: parseFloat(durationStats.rows[0]?.totalLearningHours || 0),
+          averageSessionHours: parseFloat(durationStats.rows[0]?.averageSessionHours || 0),
+          completedSessions: parseInt(sessionStats.rows[0].completed),
+        },
+        mentors: {
+          totalMentors: parseInt(mentorStats.rows[0].totalMentors),
+          completedWithMentors: parseInt(mentorStats.rows[0].completedWithMentors),
+          upcomingWithMentors: parseInt(mentorStats.rows[0].upcomingWithMentors),
+          favoriteMentors: favoriteMentors.rows,
+        },
+        skills: {
+          totalSkills: parseInt(skillStats.rows[0].totalSkills),
+          completedSkills: parseInt(skillStats.rows[0].completedSkills),
+          popularSkills: popularSkills.rows,
+        },
+        reviews: {
+          totalReviews: parseInt(reviewsGiven.rows[0].totalReviews),
+          averageRatingGiven: parseFloat(reviewsGiven.rows[0].averageRatingGiven),
+          distribution: {
+            5: parseInt(reviewsGiven.rows[0].fiveStar),
+            4: parseInt(reviewsGiven.rows[0].fourStar),
+            3: parseInt(reviewsGiven.rows[0].threeStar),
+            2: parseInt(reviewsGiven.rows[0].twoStar),
+            1: parseInt(reviewsGiven.rows[0].oneStar),
+          },
+        },
+        upcoming: {
+          nextWeek: upcomingSessions.rows,
+          count: upcomingSessions.rows.length,
+        },
+        recent: {
+          sessions: recentSessions.rows,
+        },
+        trends: {
+          recentPerformance: recentPerformance.rows,
+          monthlyTrends: monthlyTrends.rows,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get learner stats error:", error);
+    return res.status(500).json({
+      success: false,
+      errors: [formatError("server", "Failed to fetch learner statistics: " + (error as Error).message)],
+    });
+  }
+});

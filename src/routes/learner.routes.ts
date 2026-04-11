@@ -6,6 +6,7 @@ import {
   requestSession,
   getMySessions,
   cancelSession,
+  getLearnerStats,
 } from "../controllers/learner.controller";
 
 const router = Router();
@@ -28,5 +29,8 @@ router.use(authenticateJWT);
 router.post("/sessions/request", requestSession);
 router.get("/sessions", getMySessions);
 router.patch("/sessions/:sessionId/cancel", cancelSession);
+
+// Learner Stats Dashboard
+router.get("/stats", authenticateJWT, getLearnerStats);
 
 export default router;
